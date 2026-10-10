@@ -1,17 +1,15 @@
 import { Button } from "@pathscale/ui";
 import { createSignal, onSettled } from "solid-js";
-import { api, isMock } from "./api";
 import type { DocumentInfo, PageSize, SearchHit, Unlisten } from "./api";
+import { api, isMock } from "./api";
+import { EditingToolbar } from "./components/EditingToolbar";
+import { AnnotationSidebar, InsertPdf, PropertiesDialog } from "./components/EditorPanels";
 import { IconButton } from "./components/IconButton";
 import { Page } from "./components/Page";
 import { Thumbnail } from "./components/Thumbnail";
-import {
-  clamp,
-  DEFAULT_PREFERENCES,
-  readPreferences,
-  savePreferences,
-} from "./preferences";
+import { createEditor } from "./editing";
 import type { Preferences } from "./preferences";
+import { clamp, DEFAULT_PREFERENCES, readPreferences, savePreferences } from "./preferences";
 import { message, schedule } from "./runtime";
 
 const SEARCH_MAX = 200;
@@ -30,6 +28,41 @@ export function App() {
   const [searching, setSearching] = createSignal(false);
   const [searched, setSearched] = createSignal(false);
   const [hit, setHit] = createSignal<SearchHit | null>(null);
+
+  const editor = createEditor({
+    available: () => !!info() && !info()?.encrypted && !opening(),
+    currentPage,
+    navigate: jump,
+    changed: (pages) => {
+      documentRevision++;
+      sizes.clear();
+      setHit(null);
+      setInfo((previous) =>
+        previous
+          ? { ...previous, pages, outline: pages === previous.pages ? previous.outline : [] }
+          : previous,
+      );
+      const page = clamp(currentPage(), 0, Math.max(0, pages - 1));
+      setCurrentPage(page);
+      searchChanged(query());
+      editor.showPage(page);
+      later(() => {
+        fitWidth();
+        notify();
+      });
+    },
+    organized: () => {
+      // The edit event carries only a page count, not remapped outline targets.
+      setInfo((previous) => (previous ? { ...previous, outline: [] } : previous));
+    },
+    title: (title) => {
+      setInfo((previous) =>
+        previous && previous.title !== title ? { ...previous, title } : previous,
+      );
+    },
+    notify: layoutChanged,
+    error: setError,
+  });
 
   const sizes = new Map<number, PageSize>();
   const subscribers = new Set<() => void>();
@@ -98,6 +131,7 @@ export function App() {
     setCurrentPage(target);
     setHit(selected);
     fitWidth();
+    editor.showPage(target);
     later(() => {
       const page = viewport.querySelector<HTMLElement>(`[data-page-index="${target}"]`);
       if (!page) return;
@@ -111,6 +145,7 @@ export function App() {
 
   function changeView(view: Preferences["view"]): void {
     const page = currentPage();
+    if (view === "reading") editor.disable();
     changePreferences({ view });
     later(() => jump(page, hit()));
   }
@@ -148,8 +183,7 @@ export function App() {
     setSearching(true);
     searchTimer = window.setTimeout(() => {
       searchTimer = undefined;
-      const valid = () =>
-        !disposed && ticket === searchRevision && revision === documentRevision;
+      const valid = () => !disposed && ticket === searchRevision && revision === documentRevision;
       void schedule(() => api.search(text, SEARCH_MAX), valid)
         .then((found) => {
           if (!valid()) return;
@@ -188,6 +222,7 @@ export function App() {
     setError("");
     setPathPrompt(false);
     setInfo(documentInfo);
+    editor.reset();
     // The embedded engine exposes document.title read-only; a throw here would
     // abort the rest of this handler, so the title is best effort.
     try {
@@ -203,7 +238,7 @@ export function App() {
   }
 
   async function open(path?: string): Promise<void> {
-    if (opening()) return;
+    if (opening() || editor.busy()) return;
     setOpening(true);
     setError("");
     pendingDocument = null;
@@ -250,7 +285,10 @@ export function App() {
           candidate = index;
         }
       }
-      if (Number.isInteger(candidate)) setCurrentPage(candidate);
+      if (Number.isInteger(candidate)) {
+        setCurrentPage(candidate);
+        editor.showPage(candidate);
+      }
     }, 60);
   }
 
@@ -263,6 +301,7 @@ export function App() {
   }
 
   function keydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || editor.keydown(event)) return;
     const command = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
     if (command && key === "f") {
@@ -379,6 +418,34 @@ export function App() {
             if (pathPrompt()) later(() => pathInput?.focus());
           }}
         />
+        <IconButton
+          glyph="edit"
+          label="Edit PDF"
+          text="Edit"
+          pressed={editor.enabled()}
+          disabled={!editor.available() || editor.busy()}
+          onClick={() => {
+            editor.toggle();
+            if (editor.enabled()) {
+              changeView("pages");
+              setSidebarOpen(true);
+              setSidebarTab("thumbnails");
+            }
+            layoutChanged();
+          }}
+        />
+        <IconButton
+          glyph="properties"
+          label="Document properties"
+          disabled={!editor.available() || editor.busy()}
+          onClick={() => {
+            void editor.openProperties();
+          }}
+        />
+        <span class="editing-title" title={editor.state().path || info()?.title || "PDF Viewer"}>
+          {editor.state().dirty ? "* " : ""}
+          {info()?.title || "PDF Viewer"}
+        </span>
         <div class="view-switch" role="group" aria-label="Document view">
           <Button
             type="button"
@@ -519,6 +586,9 @@ export function App() {
         </details>
       </header>
 
+      {editor.enabled() ? <EditingToolbar editor={editor} /> : null}
+      {editor.propertiesOpen() ? <PropertiesDialog editor={editor} /> : null}
+
       {pathPrompt() ? (
         <form
           class="path-form"
@@ -541,11 +611,7 @@ export function App() {
           <Button type="submit" class="viewer-button" disabled={opening()}>
             Open path
           </Button>
-          <IconButton
-            label="Close path entry"
-            glyph="×"
-            onClick={() => setPathPrompt(false)}
-          />
+          <IconButton label="Close path entry" glyph="×" onClick={() => setPathPrompt(false)} />
         </form>
       ) : null}
 
@@ -648,9 +714,7 @@ export function App() {
                             }}
                           >
                             <span>{item.title}</span>
-                            {item.page !== null ? (
-                              <span class="muted">{item.page + 1}</span>
-                            ) : null}
+                            {item.page !== null ? <span class="muted">{item.page + 1}</span> : null}
                           </button>
                         </li>
                       ))}
@@ -666,18 +730,31 @@ export function App() {
                   aria-labelledby="thumbnails-tab"
                   class="thumbnail-panel"
                 >
+                  {editor.enabled() ? (
+                    <InsertPdf
+                      editor={editor}
+                      current={currentPage}
+                      count={() => info()?.pages || 0}
+                    />
+                  ) : null}
                   {Array.from({ length: info()?.pages || 0 }, (_unused, index) => (
                     <Thumbnail
                       index={index}
                       root={() => sidebar}
                       current={currentPage}
                       navigate={jump}
+                      count={() => info()?.pages || 0}
+                      subscribe={subscribe}
+                      editor={editor}
                     />
                   ))}
                 </div>
               )}
             </>
           )}
+          {editor.enabled() && info()?.pages ? (
+            <AnnotationSidebar editor={editor} current={currentPage} />
+          ) : null}
         </aside>
 
         <main
@@ -701,6 +778,7 @@ export function App() {
                     subscribe={subscribe}
                     onSize={onSize}
                     navigate={jump}
+                    editor={editor}
                   />
                 ))}
               </div>
@@ -741,9 +819,16 @@ export function App() {
 
       <footer class="viewer-status">
         <span class="document-title" title={info()?.title || "PDF Viewer"}>
+          {editor.state().dirty ? "* " : ""}
           {info()?.title || "PDF Viewer"}
         </span>
         {info()?.encrypted ? <span>Encrypted</span> : null}
+        {editor.state().dirty ? <span>Unsaved changes</span> : null}
+        {editor.status() ? (
+          <span class="editing-save-status" role="status">
+            {editor.status()}
+          </span>
+        ) : null}
         <span class="muted">
           {isMock ? "Development preview: placeholder page images" : "PDF toolkit"}
         </span>
@@ -751,4 +836,3 @@ export function App() {
     </div>
   );
 }
-

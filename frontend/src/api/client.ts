@@ -1,5 +1,8 @@
 export type Unlisten = () => void;
 export type Bbox = [number, number, number, number];
+export type Point = [number, number];
+export type Rotation = 0 | 90 | 180 | 270;
+export type Color = [number, number, number];
 
 export interface OutlineItem {
   title: string;
@@ -14,12 +17,17 @@ export interface DocumentInfo {
   outline: OutlineItem[];
 }
 
-export interface PageSize {
+export interface PageDimensions {
   width: number;
   height: number;
 }
 
-export interface PageRaster extends PageSize {
+// Width and height are the rotated display dimensions, as in the existing API.
+export interface PageSize extends PageDimensions {
+  rotate: Rotation;
+}
+
+export interface PageRaster extends PageDimensions {
   png: string;
 }
 
@@ -78,7 +86,7 @@ export interface SemanticImageRef {
   inline: boolean;
 }
 
-export interface SemanticPage extends PageSize {
+export interface SemanticPage extends PageDimensions {
   index: number;
   blocks: SemanticBlock[];
   images: SemanticImageRef[];
@@ -86,8 +94,52 @@ export interface SemanticPage extends PageSize {
   refusal: string | null;
 }
 
+export type AnnotationKind = "highlight" | "note" | "ink" | "free_text" | "square" | "circle";
+
+export interface AnnotationInput {
+  index: number;
+  kind: AnnotationKind;
+  rect: Bbox;
+  color: Color;
+  opacity: number;
+  contents?: string;
+  quads?: [number, number, number, number, number, number, number, number][];
+  paths?: Point[][];
+  width?: number;
+  text?: string;
+  size?: number;
+}
+
+export interface Annotation {
+  index: number;
+  subtype: string;
+  rect: Bbox;
+  contents: string | null;
+  color: Color | null;
+  // In-memory mock only. Native appearances are drawn by render_page.
+  preview?: AnnotationInput;
+}
+
+export interface EditState {
+  dirty: boolean;
+  can_undo: boolean;
+  can_redo: boolean;
+  path: string | null;
+}
+
+export interface DocumentProperties {
+  title: string | null;
+  author: string | null;
+  subject: string | null;
+  keywords: string | null;
+}
+
+export type InfoKey = "Title" | "Author" | "Subject" | "Keywords";
+export type SaveMode = "in_place" | "copy";
+
 export interface ViewerEvents {
   document_opened: DocumentInfo;
+  document_changed: { pages: number };
 }
 
 export interface ViewerApi {
@@ -99,9 +151,21 @@ export interface ViewerApi {
   pageImage(object: string): Promise<PageImage>;
   search(query: string, max: number): Promise<SearchHit[]>;
   thumbnail(index: number): Promise<PageRaster>;
+  editState(): Promise<EditState>;
+  annotations(index: number): Promise<Annotation[]>;
+  annotate(input: AnnotationInput): Promise<{ annotation: unknown }>;
+  removeAnnotation(index: number, annotation: number): Promise<void>;
+  rotatePage(index: number, quarterTurns: number): Promise<void>;
+  deletePage(index: number): Promise<void>;
+  movePage(from: number, to: number): Promise<void>;
+  insertPdf(path: string, at: number): Promise<void>;
+  info(): Promise<DocumentProperties>;
+  setInfo(key: InfoKey, text: string): Promise<void>;
+  undo(): Promise<EditState>;
+  redo(): Promise<EditState>;
+  save(mode: SaveMode): Promise<{ path: string }>;
   on<K extends keyof ViewerEvents>(
     event: K,
     handler: (payload: ViewerEvents[K]) => void,
   ): Promise<Unlisten>;
 }
-

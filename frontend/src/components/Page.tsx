@@ -1,9 +1,11 @@
 import { Button } from "@pathscale/ui";
 import { createSignal, onSettled } from "solid-js";
-import { api } from "../api";
 import type { PageRaster, PageSize, SearchHit, SemanticPage } from "../api";
+import { api } from "../api";
+import type { Editor } from "../editing";
 import type { Preferences } from "../preferences";
 import { deviceScale, message, observeNear, schedule } from "../runtime";
+import { AnnotationOverlay } from "./AnnotationOverlay";
 import { SemanticContent } from "./SemanticContent";
 
 interface PageProps {
@@ -14,13 +16,14 @@ interface PageProps {
   subscribe: (handler: () => void) => () => void;
   onSize: (index: number, size: PageSize) => void;
   navigate: (index: number) => void;
+  editor: Editor;
 }
 
 const POINTS_TO_REM = 96 / 72 / 16;
 const MAX_PIXELS = 16_000_000;
 
 export function Page(props: PageProps) {
-  const [size, setSize] = createSignal<PageSize>({ width: 612, height: 792 });
+  const [size, setSize] = createSignal<PageSize>({ width: 612, height: 792, rotate: 0 });
   const [raster, setRaster] = createSignal<PageRaster | null>(null);
   const [semantic, setSemantic] = createSignal<SemanticPage | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -32,20 +35,38 @@ export function Page(props: PageProps) {
     let disposed = false;
     let near = false;
     let revision = 0;
+    let contentRevision = props.editor.revision();
     let hasSize = false;
     let pendingKey = "";
     let completedKey = "";
 
+    function invalidate(): void {
+      const next = props.editor.revision();
+      if (next === contentRevision) return;
+      contentRevision = next;
+      revision++;
+      hasSize = false;
+      pendingKey = "";
+      completedKey = "";
+      setRaster(null);
+      setSemantic(null);
+      setBusy(false);
+      setError("");
+    }
+
     async function load(force = false): Promise<void> {
+      invalidate();
       if (disposed || !near) return;
       const preferences = props.preferences();
-      const key = `${preferences.view}:${preferences.zoom}:${preferences.fontScale}:${deviceScale()}`;
+      const content = contentRevision;
+      const key = `${content}:${props.editor.enabled()}:${preferences.view}:${preferences.zoom}:${preferences.fontScale}:${deviceScale()}`;
       if (!force && pendingKey === key) return;
       if (!force && preferences.view === "reading" && semantic()) return;
       if (!force && preferences.view === "pages" && raster() && completedKey === key) return;
 
       const ticket = ++revision;
-      const valid = () => !disposed && near && ticket === revision;
+      const valid = () =>
+        !disposed && near && ticket === revision && content === props.editor.revision();
       pendingKey = key;
       setError("");
       setBusy(true);
@@ -53,13 +74,15 @@ export function Page(props: PageProps) {
 
       try {
         if (!hasSize) {
-          const dimensions = await schedule(() => api.pageSize(props.index), valid);
+          const reply = await schedule(() => api.pageSize(props.index), valid);
           if (!valid()) return;
+          const dimensions: PageSize = { ...reply, rotate: reply.rotate ?? 0 };
           if (
             !Number.isFinite(dimensions.width) ||
             !Number.isFinite(dimensions.height) ||
             dimensions.width <= 0 ||
-            dimensions.height <= 0
+            dimensions.height <= 0 ||
+            ![0, 90, 180, 270].includes(dimensions.rotate)
           ) {
             throw new Error("The page has invalid dimensions");
           }
@@ -69,13 +92,17 @@ export function Page(props: PageProps) {
           if (!valid()) return;
         }
 
+        if (props.editor.enabled() && !props.editor.annotations()[props.index]) {
+          await props.editor.loadAnnotations(props.index, valid);
+          if (!valid()) return;
+        }
+
         if (preferences.view === "reading") {
           const page = await schedule(() => api.semanticPage(props.index), valid);
           if (valid()) setSemantic(page);
         } else {
           const dimensions = size();
-          const requested =
-            preferences.zoom * preferences.fontScale * (96 / 72) * deviceScale();
+          const requested = preferences.zoom * preferences.fontScale * (96 / 72) * deviceScale();
           const scale = Math.min(
             requested,
             Math.sqrt(MAX_PIXELS / (dimensions.width * dimensions.height)),
@@ -106,6 +133,7 @@ export function Page(props: PageProps) {
       }
     });
     const unsubscribe = props.subscribe(() => {
+      invalidate();
       observer.check();
       if (near) void load();
     });
@@ -170,6 +198,12 @@ export function Page(props: PageProps) {
             {props.hit()?.page === props.index ? (
               <span class="search-highlight" style={hitStyle()} aria-hidden="true" />
             ) : null}
+            <AnnotationOverlay
+              index={props.index}
+              size={size}
+              ready={() => !!raster() && !busy() && !error()}
+              editor={props.editor}
+            />
           </div>
           <figcaption class="page-number">Page {props.index + 1}</figcaption>
         </figure>
@@ -209,4 +243,3 @@ export function Page(props: PageProps) {
     </section>
   );
 }
-

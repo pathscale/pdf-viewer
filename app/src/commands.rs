@@ -1,8 +1,9 @@
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::editing::{self, History};
 use pdf_toolkit::core::pages::{Page, PageWalk};
 use pdf_toolkit::core::{Document, Limits, ObjectRef, PdfSource};
 use pdf_toolkit::raster::{encode_png, Raster};
@@ -13,7 +14,7 @@ use pdf_toolkit::text::images::{load_image, ImageData};
 use pdf_toolkit::text::semantic::{LinkTarget, SemanticKind, SemanticPage, SemanticReader};
 use serde_json::{json, Value};
 
-const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16_000_000;
 const MAX_SEARCH_HITS: u64 = 10_000;
 const MAX_QUERY_BYTES: usize = 4096;
@@ -23,29 +24,30 @@ const THUMBNAIL_WIDTH: f64 = 160.0;
 pub type State = Arc<Mutex<Option<OpenDoc>>>;
 
 pub struct OpenDoc {
-    bytes: Arc<[u8]>,
-    document: Document,
-    pages: Vec<Page>,
+    pub(crate) bytes: Arc<[u8]>,
+    pub(crate) document: Document,
+    pub(crate) pages: Vec<Page>,
     font_cache: FontCache,
-    semantic: Option<SemanticReader>,
+    pub(crate) semantic: Option<SemanticReader>,
     semantic_next: usize,
     summary: Value,
+    pub(crate) history: History,
 }
 
 fn refusal(kind: &str, requested: u64, maximum: u64) -> String {
     format!("refused: {kind}, requested={requested}, maximum={maximum}")
 }
 
-fn pdf_error(error: pdf_toolkit::core::DocError) -> String {
+pub(crate) fn pdf_error(error: pdf_toolkit::core::DocError) -> String {
     format!("{error:?}")
 }
 
 /// A source over the shared bytes; fails only when there is no PDF header.
-fn source(bytes: &Arc<[u8]>) -> Result<PdfSource, String> {
+pub(crate) fn source(bytes: &Arc<[u8]>) -> Result<PdfSource, String> {
     PdfSource::new(Arc::clone(bytes)).map_err(|error| error.to_string())
 }
 
-fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
+pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
     let mut file = File::open(path)
         .map_err(|error| format!("could not open {}: {error}", path.display()))?;
     let metadata = file
@@ -83,7 +85,25 @@ fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
 }
 
 pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
-    let bytes = read_source(path)?;
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("could not locate the current directory: {error}"))?
+            .join(path)
+    };
+    let bytes = read_source(&path)?;
+    let opened = open_bytes(bytes, path)?;
+    let summary = opened.summary.clone();
+
+    let mut current = state
+        .lock()
+        .map_err(|_| "the document state is unavailable".to_owned())?;
+    *current = Some(opened);
+    Ok(summary)
+}
+
+pub(crate) fn open_bytes(bytes: Arc<[u8]>, path: PathBuf) -> Result<OpenDoc, String> {
     let limits = Limits::default();
     let document = Document::open(source(&bytes)?, limits)
         .map_err(pdf_error)?;
@@ -146,21 +166,16 @@ pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
         "encrypted": encrypted,
         "outline": outline
     });
-    let opened = OpenDoc {
+    Ok(OpenDoc {
+        history: History::new(Arc::clone(&bytes), path),
         bytes,
         document,
         pages,
         font_cache: FontCache::default(),
         semantic,
         semantic_next: 0,
-        summary: summary.clone(),
-    };
-
-    let mut current = state
-        .lock()
-        .map_err(|_| "the document state is unavailable".to_owned())?;
-    *current = Some(opened);
-    Ok(summary)
+        summary,
+    })
 }
 
 fn string_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -177,7 +192,7 @@ fn index_arg(args: &Value) -> Result<usize, String> {
     usize::try_from(index).map_err(|_| "index is out of range".to_owned())
 }
 
-fn page(doc: &OpenDoc, index: usize) -> Result<&Page, String> {
+pub(crate) fn page(doc: &OpenDoc, index: usize) -> Result<&Page, String> {
     doc.pages
         .get(index)
         .ok_or_else(|| format!("page index {index} is out of range"))
@@ -190,14 +205,14 @@ fn dimensions(page: &Page) -> Result<(f64, f64), String> {
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return Err("the page has invalid display dimensions".to_owned());
     }
-    if matches!(page.rotate, 90 | 270) {
+    if matches!(page.rotate.rem_euclid(360), 90 | 270) {
         Ok((height, width))
     } else {
         Ok((width, height))
     }
 }
 
-fn require_unencrypted(doc: &OpenDoc) -> Result<(), String> {
+pub(crate) fn require_unencrypted(doc: &OpenDoc) -> Result<(), String> {
     if doc.document.encrypted() {
         Err("encrypted documents cannot be decoded".to_owned())
     } else {
@@ -598,14 +613,49 @@ fn dispatch(
                 "Pass a PDF path to pdf-viewer or drop a local PDF onto the window.".to_owned()
             });
     }
+    if command == "edit_state" {
+        return Ok(current
+            .as_ref()
+            .map(editing::edit_state)
+            .unwrap_or_else(|| json!({
+                "dirty": false,
+                "can_undo": false,
+                "can_redo": false,
+                "path": null
+            })));
+    }
     let doc = current
         .as_mut()
         .ok_or_else(|| "open a PDF first".to_owned())?;
 
+    if editing::handles(command) {
+        let (reply, changed) = editing::dispatch(doc, command, &args)?;
+        let pages = doc.pages.len();
+        drop(current);
+        if changed {
+            crate::document_changed(handle, pages);
+        }
+        return Ok(reply);
+    }
+
     match command {
         "page_size" => {
-            let (width, height) = dimensions(page(doc, index_arg(&args)?)?)?;
-            Ok(json!({ "width": width, "height": height }))
+            let descriptor = page(doc, index_arg(&args)?)?;
+            let (width, height) = dimensions(descriptor)?;
+            let rotate = descriptor.rotate.rem_euclid(360);
+            if !matches!(rotate, 0 | 90 | 180 | 270) {
+                return Err("the page has an invalid rotation".to_owned());
+            }
+            let [x0, y0, _, _] = descriptor.crop_box;
+            if !x0.is_finite() || !y0.is_finite() {
+                return Err("the page has an invalid crop box origin".to_owned());
+            }
+            Ok(json!({
+                "width": width,
+                "height": height,
+                "rotate": rotate,
+                "origin": [x0, y0]
+            }))
         }
         "render_page" => {
             let scale = args
@@ -639,6 +689,19 @@ pub fn table(state: State, handle: izumo::AppHandle) -> Vec<(&'static str, izumo
         "page_image",
         "search",
         "thumbnail",
+        "edit_state",
+        "annotations",
+        "annotate",
+        "remove_annotation",
+        "rotate_page",
+        "delete_page",
+        "move_page",
+        "insert_pdf",
+        "info",
+        "set_info",
+        "undo",
+        "redo",
+        "save",
         "__viewer_current_document",
     ]
     .into_iter()

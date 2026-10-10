@@ -2,9 +2,17 @@
 
 mod commands;
 mod data_url;
+mod editing;
 mod frontend;
 
 use std::sync::{Arc, Mutex};
+
+pub(crate) fn document_changed(handle: &izumo::AppHandle, pages: usize) {
+    let reply = serde_json::json!({ "pages": pages });
+    if let Err(error) = handle.emit("document_changed", &reply) {
+        eprintln!("pdf-viewer: could not announce the changed document: {error}");
+    }
+}
 
 fn window_spec() -> izumo::WindowSpec {
     izumo::WindowSpec {
