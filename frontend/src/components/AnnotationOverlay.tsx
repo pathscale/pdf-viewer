@@ -1,9 +1,18 @@
 import { Button } from "@pathscale/ui";
 import { createSignal } from "solid-js";
-import type { AnnotationInput, PageSize, Point } from "../api";
+import type { AnnotationInput, PageSize, Point, TextLine } from "../api";
 import { isMock } from "../api";
 import type { Editor } from "../editing";
-import { bounds, displayRect, displayToPdf, noteRect, pdfTransform } from "../pageCoordinates";
+import {
+  bounds,
+  displayRect,
+  displayToPdf,
+  noteRect,
+  pdfToDisplay,
+  pdfTransform,
+} from "../pageCoordinates";
+import type { GlyphPosition } from "../textSelection";
+import { glyphAt, nearestGlyph, textFragments } from "../textSelection";
 import { AnnotationShape } from "./AnnotationShape";
 
 interface Gesture {
@@ -16,6 +25,7 @@ interface Gesture {
   revision: number;
   interaction: number;
   tolerance: number;
+  text: { lines: TextLine[]; anchor: GlyphPosition } | null;
 }
 
 interface Draft {
@@ -53,6 +63,7 @@ function simplified(points: Point[], tolerance: number): Point[] {
 export function AnnotationOverlay(props: {
   index: number;
   size: () => PageSize;
+  lines: () => TextLine[] | null;
   ready: () => boolean;
   editor: Editor;
 }) {
@@ -105,6 +116,12 @@ export function AnnotationOverlay(props: {
   function build(value: Gesture): AnnotationInput {
     const input = { ...value.input };
     if (input.kind === "note") return input;
+    if (input.kind === "highlight" && value.text) {
+      const { lines, anchor } = value.text;
+      // Text lines are in display space; the gesture is in PDF space.
+      const endpoint = nearestGlyph(lines, pdfToDisplay(value.end, value.size)) ?? anchor;
+      return { ...input, ...textFragments(lines, anchor, endpoint, value.size) };
+    }
     if (input.kind === "ink") {
       const points = simplified(value.points, value.tolerance);
       input.paths = [points];
@@ -130,6 +147,8 @@ export function AnnotationOverlay(props: {
       !event.isPrimary
     )
       return;
+    const lines = props.lines();
+    if (editor.tool() === "highlight" && lines === null) return;
     const size = { ...props.size() };
     const position = point(event, size);
     if (!position) return;
@@ -166,6 +185,8 @@ export function AnnotationOverlay(props: {
     };
     if (kind === "note") input.rect = noteRect(position, size);
     if (kind === "free_text") input.size = 12;
+    const anchor =
+      kind === "highlight" && lines ? glyphAt(lines, pdfToDisplay(position, size)) : null;
     const rect = layer.getBoundingClientRect();
     setGesture({
       pointer: event.pointerId,
@@ -178,6 +199,7 @@ export function AnnotationOverlay(props: {
       interaction: editor.interaction(),
       tolerance:
         (Math.max(size.width / rect.width, size.height / rect.height) * 1.5) / size.user_unit,
+      text: anchor && lines ? { lines, anchor } : null,
     });
     try {
       layer.setPointerCapture(event.pointerId);
@@ -222,7 +244,17 @@ export function AnnotationOverlay(props: {
     if (!value || !current(value)) return;
     const input = build(value);
     const [x0, y0, x1, y1] = input.rect;
-    if (input.kind === "ink") {
+    if (value.text) {
+      if (
+        !input.quads?.length ||
+        !input.rect.every(Number.isFinite) ||
+        x0 >= x1 ||
+        y0 >= y1 ||
+        Math.hypot(value.end[0] - value.start[0], value.end[1] - value.start[1]) <
+          value.tolerance
+      )
+        return;
+    } else if (input.kind === "ink") {
       if ((input.paths?.[0]?.length || 0) < 2) return;
     } else if (input.kind !== "note" && (x1 - x0 < 2 || y1 - y0 < 2)) {
       return;
@@ -244,7 +276,12 @@ export function AnnotationOverlay(props: {
 
   const preview = () => {
     const value = gesture();
-    if (value && current(value)) return build(value);
+    if (value && current(value)) {
+      const input = build(value);
+      return input.kind === "highlight"
+        ? { ...input, opacity: Math.min(input.opacity, 0.4) }
+        : input;
+    }
     const pending = activeDraft();
     return pending
       ? {

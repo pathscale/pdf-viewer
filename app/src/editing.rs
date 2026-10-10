@@ -187,6 +187,42 @@ fn parse_quads(value: &Value) -> Result<Vec<[f32; 8]>, String> {
         .collect()
 }
 
+fn highlight_rect(quads: &[[f32; 8]]) -> Result<[f32; 4], String> {
+    let mut rect = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for quad in quads {
+        // QuadPoints use top-left, top-right, bottom-left, bottom-right order.
+        // Walk the perimeter when checking the area.
+        let points = [
+            [quad[0], quad[1]],
+            [quad[2], quad[3]],
+            [quad[6], quad[7]],
+            [quad[4], quad[5]],
+        ];
+        let mut area = 0.0f64;
+        for index in 0..4 {
+            let point = points[index];
+            let next = points[(index + 1) % 4];
+            area += f64::from(point[0]) * f64::from(next[1])
+                - f64::from(next[0]) * f64::from(point[1]);
+            rect[0] = rect[0].min(point[0]);
+            rect[1] = rect[1].min(point[1]);
+            rect[2] = rect[2].max(point[0]);
+            rect[3] = rect[3].max(point[1]);
+        }
+        if !area.is_finite() || area == 0.0 {
+            return Err("each highlight quad must have a finite nonzero area".to_owned());
+        }
+    }
+    if rect.iter().any(|value| !value.is_finite())
+        || rect[0] >= rect[2] || rect[1] >= rect[3]
+        || !(rect[2] - rect[0]).is_finite()
+        || !(rect[3] - rect[1]).is_finite()
+    {
+        return Err("highlight quads must have finite positive bounds".to_owned());
+    }
+    Ok(rect)
+}
+
 fn parse_paths(value: &Value) -> Result<Vec<Vec<[f32; 2]>>, String> {
     let values = array(value, "paths", MAX_INK_PATHS)?;
     let mut paths = Vec::new();
@@ -207,7 +243,7 @@ fn parse_paths(value: &Value) -> Result<Vec<Vec<[f32; 2]>>, String> {
 
 fn annotation_arg(args: &Value) -> Result<Annot, String> {
     let kind = string_arg(args, "kind")?;
-    let rect = fixed::<4>(
+    let mut rect = fixed::<4>(
         args.get("rect").ok_or_else(|| "rect is required".to_owned())?,
         "rect",
     )?;
@@ -241,9 +277,13 @@ fn annotation_arg(args: &Value) -> Result<Annot, String> {
     let quads = args.get("quads").map(parse_quads).transpose()?;
     let paths = args.get("paths").map(parse_paths).transpose()?;
     let kind = match kind {
-        "highlight" => AnnotKind::Highlight {
-            quads: quads.ok_or_else(|| "quads are required for highlight".to_owned())?,
-        },
+        "highlight" => {
+            let quads = quads.ok_or_else(|| "quads are required for highlight".to_owned())?;
+            rect = highlight_rect(&quads)?;
+            // The annotation writer receives every fragment together, so its
+            // QuadPoints and multiply appearance belong to one annotation.
+            AnnotKind::Highlight { quads }
+        }
         "note" => AnnotKind::Note,
         "ink" => AnnotKind::Ink {
             paths: paths.ok_or_else(|| "paths are required for ink".to_owned())?,

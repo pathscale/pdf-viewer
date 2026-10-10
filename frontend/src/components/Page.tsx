@@ -1,6 +1,6 @@
 import { Button } from "@pathscale/ui";
 import { createSignal, onSettled } from "solid-js";
-import type { PageRaster, PageSize, SearchHit, SemanticPage } from "../api";
+import type { PageRaster, PageSize, SearchHit, SemanticPage, TextLine } from "../api";
 import { api } from "../api";
 import type { Editor } from "../editing";
 import type { Preferences } from "../preferences";
@@ -32,6 +32,7 @@ export function Page(props: PageProps) {
   });
   const [raster, setRaster] = createSignal<PageRaster | null>(null);
   const [semantic, setSemantic] = createSignal<SemanticPage | null>(null);
+  const [textLines, setTextLines] = createSignal<TextLine[] | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   let section!: HTMLElement;
@@ -56,6 +57,7 @@ export function Page(props: PageProps) {
       completedKey = "";
       setRaster(null);
       setSemantic(null);
+      setTextLines(null);
       setBusy(false);
       setError("");
     }
@@ -88,7 +90,11 @@ export function Page(props: PageProps) {
             !Number.isFinite(dimensions.height) ||
             dimensions.width <= 0 ||
             dimensions.height <= 0 ||
-            ![0, 90, 180, 270].includes(dimensions.rotate)
+            ![0, 90, 180, 270].includes(dimensions.rotate) ||
+            (dimensions.origin !== undefined &&
+              (dimensions.origin.length !== 2 || !dimensions.origin.every(Number.isFinite))) ||
+            !Number.isFinite(dimensions.user_unit ?? 1) ||
+            (dimensions.user_unit ?? 1) <= 0
           ) {
             throw new Error("The page has invalid dimensions");
           }
@@ -107,6 +113,11 @@ export function Page(props: PageProps) {
           const page = await schedule(() => api.semanticPage(props.index), valid);
           if (valid()) setSemantic(page);
         } else {
+          if (props.editor.enabled() && textLines() === null) {
+            const lines = await schedule(() => api.textLines(props.index), valid);
+            if (!valid()) return;
+            setTextLines(lines);
+          }
           const dimensions = size();
           const requested = preferences.zoom * preferences.fontScale * (96 / 72) * deviceScale();
           const scale = Math.min(
@@ -135,6 +146,7 @@ export function Page(props: PageProps) {
         revision++;
         pendingKey = "";
         setRaster(null);
+        setTextLines(null);
         setBusy(false);
       }
     });
@@ -207,7 +219,13 @@ export function Page(props: PageProps) {
             <AnnotationOverlay
               index={props.index}
               size={size}
-              ready={() => !!raster() && !busy() && !error()}
+              lines={textLines}
+              ready={() =>
+                !!raster() &&
+                !busy() &&
+                !error() &&
+                (props.editor.tool() !== "highlight" || textLines() !== null)
+              }
               editor={props.editor}
             />
           </div>
