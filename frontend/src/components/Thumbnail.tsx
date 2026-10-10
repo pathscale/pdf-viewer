@@ -20,7 +20,13 @@ interface ThumbnailProps {
 export function Thumbnail(props: ThumbnailProps) {
   const [png, setPng] = createSignal<string | null>(null);
   const [error, setError] = createSignal("");
-  const [size, setSize] = createSignal<PageSize>({ width: 612, height: 792, rotate: 0 });
+  const [size, setSize] = createSignal<PageSize>({
+    width: 612,
+    height: 792,
+    rotate: 0,
+    origin: [0, 0],
+    user_unit: 1,
+  });
   let button!: HTMLButtonElement;
 
   onSettled(() => {

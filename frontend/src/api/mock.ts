@@ -294,6 +294,8 @@ export function createMockApi(): ViewerApi {
       width: swapped ? page.height : page.width,
       height: swapped ? page.width : page.height,
       rotate,
+      origin: [0, 0],
+      user_unit: 1,
     };
   }
 

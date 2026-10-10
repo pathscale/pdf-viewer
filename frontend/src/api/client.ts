@@ -22,9 +22,12 @@ export interface PageDimensions {
   height: number;
 }
 
-// Width and height are the rotated display dimensions, as in the existing API.
+// Width and height are the rotated display dimensions: crop box size times
+// UserUnit. origin is the crop box lower-left in default user space.
 export interface PageSize extends PageDimensions {
   rotate: Rotation;
+  origin: Point;
+  user_unit: number;
 }
 
 export interface PageRaster extends PageDimensions {
@@ -169,3 +172,4 @@ export interface ViewerApi {
     handler: (payload: ViewerEvents[K]) => void,
   ): Promise<Unlisten>;
 }
+
