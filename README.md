@@ -1,4 +1,4 @@
-# pdf-toolkit-viewer
+# pdf-viewer
 
 A pure Rust PDF viewer: an izumo window (Blitz and Boa, no OS webview) with a Solid interface built on
 @pathscale/ui, reading documents through the `pdf-toolkit` crates.

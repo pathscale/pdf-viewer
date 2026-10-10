@@ -1,9 +1,10 @@
 [package]
-name = "pdf-toolkit-viewer"
+name = "pdf-viewer"
 description = "A PDF viewer with page and reading views"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 build = "build.rs"
 publish = false
 

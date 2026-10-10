@@ -6,7 +6,7 @@ export interface Preferences {
   theme: "light" | "dark";
 }
 
-const STORAGE_KEY = "pdf-toolkit-viewer.preferences.v1";
+const STORAGE_KEY = "pdf-viewer.preferences.v1";
 
 export const DEFAULT_PREFERENCES: Preferences = {
   view: "pages",

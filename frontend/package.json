@@ -1,5 +1,5 @@
 {
-  "name": "pdf-toolkit-viewer-frontend",
+  "name": "pdf-viewer-frontend",
   "version": "0.1.0",
   "description": "PDF toolkit viewer interface",
   "type": "module",
