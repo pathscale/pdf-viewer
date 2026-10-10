@@ -1,6 +1,7 @@
 import type {
   Annotation,
   AnnotationKind,
+  Bbox,
   DocumentInfo,
   DocumentProperties,
   EditState,
@@ -344,6 +345,16 @@ export function createMockApi(): ViewerApi {
     },
     async pageSize(index) {
       return displaySize(index);
+    },
+    async textLines(index) {
+      // Two plausible lines of 12-point text, each glyph 6 units wide, in PDF user space.
+      const page = requirePage(index);
+      const top = page.height - 72;
+      return [0, 1].map((row) => {
+        const y1 = top - row * 16;
+        const glyphs: [number, number][] = Array.from({ length: 40 }, (_, i) => [72 + i * 6, 78 + i * 6]);
+        return { bbox: [72, y1 - 12, 312, y1] as Bbox, glyphs };
+      });
     },
     async renderPage(index, scale) {
       return raster(index, scale);

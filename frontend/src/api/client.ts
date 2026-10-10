@@ -1,6 +1,7 @@
 export type Unlisten = () => void;
 export type Bbox = [number, number, number, number];
 export type Point = [number, number];
+export type Quad = [number, number, number, number, number, number, number, number];
 export type Rotation = 0 | 90 | 180 | 270;
 export type Color = [number, number, number];
 
@@ -43,6 +44,13 @@ export interface SearchHit {
   page: number;
   snippet: string;
   bbox: Bbox;
+}
+
+// Lines and glyphs are in reading order, in unrotated PDF user space.
+// A glyph shares its line's y0/y1 and supplies its own x0/x1.
+export interface TextLine {
+  bbox: Bbox;
+  glyphs: [number, number][];
 }
 
 export interface SemanticSpan {
@@ -106,7 +114,7 @@ export interface AnnotationInput {
   color: Color;
   opacity: number;
   contents?: string;
-  quads?: [number, number, number, number, number, number, number, number][];
+  quads?: Quad[];
   paths?: Point[][];
   width?: number;
   text?: string;
@@ -151,6 +159,7 @@ export interface ViewerApi {
   pageSize(index: number): Promise<PageSize>;
   renderPage(index: number, scale: number): Promise<PageRaster>;
   semanticPage(index: number): Promise<SemanticPage>;
+  textLines(index: number): Promise<TextLine[]>;
   pageImage(object: string): Promise<PageImage>;
   search(query: string, max: number): Promise<SearchHit[]>;
   thumbnail(index: number): Promise<PageRaster>;

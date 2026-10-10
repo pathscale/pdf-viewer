@@ -4,6 +4,7 @@ mod commands;
 mod data_url;
 mod editing;
 mod frontend;
+mod text_lines;
 
 use std::sync::{Arc, Mutex};
 
@@ -49,9 +50,11 @@ fn run() -> izumo::AppResult {
 
     let builder = izumo::App::builder().manage(Arc::clone(&state));
     let handle = builder.handle();
+    let mut command_table = commands::table(Arc::clone(&state), handle);
+    command_table.push(("text_lines", text_lines::handler(state)));
 
     builder
-        .commands(commands::table(state, handle))
+        .commands(command_table)
         .window(window_spec())
         .setup(move |app| {
             // Local agent control (inspection, screenshots) is off unless asked

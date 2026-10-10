@@ -25,9 +25,23 @@ export function AnnotationShape(props: { input: AnnotationInput }) {
   const stroke = input.width || 2;
 
   return (
-    <g opacity={input.opacity} fill={colour} stroke={colour}>
+    <g
+      opacity={input.opacity}
+      fill={colour}
+      stroke={colour}
+      style={{ "mix-blend-mode": input.kind === "highlight" ? "multiply" : "normal" }}
+    >
       {input.kind === "highlight" ? (
-        <rect x={x0} y={y0} width={width} height={height} stroke="none" />
+        input.quads?.length ? (
+          input.quads.map((quad) => (
+            <polygon
+              points={`${quad[0]},${quad[1]} ${quad[2]},${quad[3]} ${quad[6]},${quad[7]} ${quad[4]},${quad[5]}`}
+              stroke="none"
+            />
+          ))
+        ) : (
+          <rect x={x0} y={y0} width={width} height={height} stroke="none" />
+        )
       ) : input.kind === "ink" ? (
         (input.paths || []).map((path) => (
           <polyline
