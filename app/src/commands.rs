@@ -1,0 +1,654 @@
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use pdf_toolkit::core::pages::{Page, PageWalk};
+use pdf_toolkit::core::{Document, Limits, ObjectRef, PdfSource};
+use pdf_toolkit::raster::{encode_png, Raster};
+use pdf_toolkit::render::RenderOptions;
+use pdf_toolkit::text::extract::page_receipt_cached;
+use pdf_toolkit::text::font::FontCache;
+use pdf_toolkit::text::images::{load_image, ImageData};
+use pdf_toolkit::text::semantic::{LinkTarget, SemanticKind, SemanticPage, SemanticReader};
+use serde_json::{json, Value};
+
+const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PIXELS: u64 = 16_000_000;
+const MAX_SEARCH_HITS: u64 = 10_000;
+const MAX_QUERY_BYTES: usize = 4096;
+const MAX_SEARCH_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const THUMBNAIL_WIDTH: f64 = 160.0;
+
+pub type State = Arc<Mutex<Option<OpenDoc>>>;
+
+pub struct OpenDoc {
+    bytes: Arc<[u8]>,
+    document: Document,
+    pages: Vec<Page>,
+    font_cache: FontCache,
+    semantic: Option<SemanticReader>,
+    semantic_next: usize,
+    summary: Value,
+}
+
+fn refusal(kind: &str, requested: u64, maximum: u64) -> String {
+    format!("refused: {kind}, requested={requested}, maximum={maximum}")
+}
+
+fn pdf_error(error: pdf_toolkit::core::DocError) -> String {
+    format!("{error:?}")
+}
+
+/// A source over the shared bytes; fails only when there is no PDF header.
+fn source(bytes: &Arc<[u8]>) -> Result<PdfSource, String> {
+    PdfSource::new(Arc::clone(bytes)).map_err(|error| error.to_string())
+}
+
+fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err("the PDF path must name a regular file".to_owned());
+    }
+    let length = metadata.len();
+    if length > MAX_SOURCE_BYTES {
+        return Err(refusal("source_bytes", length, MAX_SOURCE_BYTES));
+    }
+    let length = usize::try_from(length)
+        .map_err(|_| refusal("source_bytes", length, MAX_SOURCE_BYTES))?;
+    let mut storage = Vec::new();
+    storage
+        .try_reserve_exact(length)
+        .map_err(|_| refusal("source_bytes", length as u64, MAX_SOURCE_BYTES))?;
+    storage.resize(length, 0);
+
+    let mut bytes: Arc<[u8]> = Arc::from(storage);
+    let destination = Arc::get_mut(&mut bytes)
+        .ok_or_else(|| "could not obtain the new PDF buffer".to_owned())?;
+    file.read_exact(destination)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let mut extra = [0u8; 1];
+    if file
+        .read(&mut extra)
+        .map_err(|error| format!("could not finish reading {}: {error}", path.display()))?
+        != 0
+    {
+        return Err("the PDF changed while it was being opened; open it again".to_owned());
+    }
+    Ok(bytes)
+}
+
+pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
+    let bytes = read_source(path)?;
+    let limits = Limits::default();
+    let document = Document::open(source(&bytes)?, limits)
+        .map_err(pdf_error)?;
+    let encrypted = document.encrypted();
+
+    let pages = {
+        let mut resolver = document.resolver();
+        let mut pages = Vec::new();
+        match PageWalk::new(&mut resolver) {
+            Ok(walk) => {
+                for page in walk {
+                    match page {
+                        Ok(page) => pages.push(page),
+                        Err(pdf_toolkit::core::DocError::Encrypted) if encrypted => break,
+                        Err(error) => return Err(pdf_error(error)),
+                    }
+                }
+            }
+            Err(pdf_toolkit::core::DocError::Encrypted) if encrypted => {}
+            Err(error) => return Err(pdf_error(error)),
+        }
+        pages
+    };
+
+    let mut semantic = if encrypted {
+        None
+    } else {
+        Some(
+            SemanticReader::open(source(&bytes)?, limits)
+                .map_err(pdf_error)?,
+        )
+    };
+    let title = semantic
+        .as_ref()
+        .and_then(|reader| reader.info().title.clone());
+    let outline: Vec<Value> = semantic
+        .as_mut()
+        .map(|reader| {
+            reader
+                .outline()
+                .into_iter()
+                .map(|item| {
+                    let page = match item.target {
+                        Some(LinkTarget::Page { index, .. }) => Some(index),
+                        _ => None,
+                    };
+                    json!({
+                        "title": item.title,
+                        "level": item.level,
+                        "page": page
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let summary = json!({
+        "title": title,
+        "pages": pages.len(),
+        "encrypted": encrypted,
+        "outline": outline
+    });
+    let opened = OpenDoc {
+        bytes,
+        document,
+        pages,
+        font_cache: FontCache::default(),
+        semantic,
+        semantic_next: 0,
+        summary: summary.clone(),
+    };
+
+    let mut current = state
+        .lock()
+        .map_err(|_| "the document state is unavailable".to_owned())?;
+    *current = Some(opened);
+    Ok(summary)
+}
+
+fn string_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{key} must be a string"))
+}
+
+fn index_arg(args: &Value) -> Result<usize, String> {
+    let index = args
+        .get("index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "index must be a nonnegative integer".to_owned())?;
+    usize::try_from(index).map_err(|_| "index is out of range".to_owned())
+}
+
+fn page(doc: &OpenDoc, index: usize) -> Result<&Page, String> {
+    doc.pages
+        .get(index)
+        .ok_or_else(|| format!("page index {index} is out of range"))
+}
+
+fn dimensions(page: &Page) -> Result<(f64, f64), String> {
+    let [x0, y0, x1, y1] = page.crop_box;
+    let width = (x1 - x0).max(0.0) * page.user_unit;
+    let height = (y1 - y0).max(0.0) * page.user_unit;
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("the page has invalid display dimensions".to_owned());
+    }
+    if matches!(page.rotate, 90 | 270) {
+        Ok((height, width))
+    } else {
+        Ok((width, height))
+    }
+}
+
+fn require_unencrypted(doc: &OpenDoc) -> Result<(), String> {
+    if doc.document.encrypted() {
+        Err("encrypted documents cannot be decoded".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+fn capped_scale(width: f64, height: f64, requested: f64) -> Result<f32, String> {
+    if !requested.is_finite() || requested <= 0.0 {
+        return Err("scale must be finite and positive".to_owned());
+    }
+    let width = width as f32;
+    let height = height as f32;
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("the page dimensions cannot be rasterized".to_owned());
+    }
+    let area = f64::from(width) * f64::from(height);
+    let maximum = MAX_PIXELS as f64;
+    let bound = (maximum / area)
+        .sqrt()
+        .min(maximum / f64::from(width))
+        .min(maximum / f64::from(height));
+    let mut scale = requested.min(bound).min(f64::from(f32::MAX)) as f32;
+
+    for _ in 0..128 {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err("scale is too small to rasterize this page".to_owned());
+        }
+        let pixels_wide = (width * scale).ceil().max(1.0) as u64;
+        let pixels_high = (height * scale).ceil().max(1.0) as u64;
+        if pixels_wide
+            .checked_mul(pixels_high)
+            .is_some_and(|pixels| pixels <= MAX_PIXELS)
+        {
+            return Ok(scale);
+        }
+        scale *= 0.99;
+    }
+    Err(refusal("raster_pixels", u64::MAX, MAX_PIXELS))
+}
+
+fn png_bytes(raster: &Raster) -> Result<Vec<u8>, String> {
+    let pixels = u64::from(raster.width)
+        .checked_mul(u64::from(raster.height))
+        .ok_or_else(|| refusal("raster_pixels", u64::MAX, MAX_PIXELS))?;
+    if pixels == 0 || pixels > MAX_PIXELS {
+        return Err(refusal("raster_pixels", pixels, MAX_PIXELS));
+    }
+    let expected = pixels
+        .checked_mul(4)
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or_else(|| refusal("raster_bytes", u64::MAX, MAX_PIXELS * 4))?;
+    if raster.rgba.len() != expected {
+        return Err("the raster buffer has an invalid length".to_owned());
+    }
+    let bytes = encode_png(raster);
+    if bytes.is_empty() {
+        return Err("PNG encoding failed".to_owned());
+    }
+    Ok(bytes)
+}
+
+fn render(doc: &OpenDoc, index: usize, requested: f64) -> Result<Value, String> {
+    require_unencrypted(doc)?;
+    let page = page(doc, index)?;
+    let (width, height) = dimensions(page)?;
+    let scale = capped_scale(width, height, requested)?;
+    let options = RenderOptions { scale: scale as f32, fallback_font: None };
+    let mut resolver = doc.document.resolver();
+    let raster = pdf_toolkit::raster::render_page(
+        &mut resolver,
+        page,
+        &options,
+        [255, 255, 255, 255],
+    )
+    .map_err(pdf_error)?;
+    let png = png_bytes(&raster)?;
+    Ok(json!({
+        "width": raster.width,
+        "height": raster.height,
+        "png": base64(&png)
+    }))
+}
+
+fn object_arg(args: &Value) -> Result<ObjectRef, String> {
+    let mut parts = string_arg(args, "object")?.split_whitespace();
+    let number = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .filter(|number| *number != 0)
+        .ok_or_else(|| "object must contain a positive object number".to_owned())?;
+    let generation = parts
+        .next()
+        .and_then(|part| part.parse::<u16>().ok())
+        .ok_or_else(|| "object must contain a generation in 0..65535".to_owned())?;
+    if parts.next().is_some() {
+        return Err("object must have the form \"N G\"".to_owned());
+    }
+    Ok(ObjectRef::new(number, generation))
+}
+
+fn image(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
+    require_unencrypted(doc)?;
+    let mut resolver = doc.document.resolver();
+    let image = load_image(&mut resolver, object_arg(args)?, MAX_PIXELS)
+        .map_err(pdf_error)?;
+    let (mime, data) = match image.data {
+        ImageData::Jpeg(data) => ("image/jpeg", data),
+        ImageData::Pixels { rgba } => {
+            let raster = Raster {
+                width: image.width,
+                height: image.height,
+                rgba,
+            };
+            ("image/png", png_bytes(&raster)?)
+        }
+        ImageData::Unsupported(reason) => {
+            return Err(format!("unsupported page image: {reason}"));
+        }
+    };
+    Ok(json!({ "mime": mime, "data": base64(&data) }))
+}
+
+fn semantic_at(doc: &mut OpenDoc, index: usize) -> Result<SemanticPage, String> {
+    require_unencrypted(doc)?;
+    page(doc, index)?;
+
+    if doc.semantic.is_none() || index < doc.semantic_next {
+        doc.semantic = Some(
+            SemanticReader::open(
+                source(&doc.bytes)?,
+                *doc.document.limits(),
+            )
+            .map_err(pdf_error)?,
+        );
+        doc.semantic_next = 0;
+    }
+
+    while doc.semantic_next <= index {
+        let reader = doc
+            .semantic
+            .as_mut()
+            .ok_or_else(|| "the semantic reader is unavailable".to_owned())?;
+        let result = reader
+            .next_page()
+            .ok_or_else(|| "the semantic reader ended before the requested page".to_owned())?;
+        let position = doc.semantic_next;
+        doc.semantic_next = doc.semantic_next.saturating_add(1);
+        if position == index {
+            return Ok(result);
+        }
+    }
+    Err("the semantic reader could not locate the requested page".to_owned())
+}
+
+fn target_json(target: &LinkTarget) -> Value {
+    match target {
+        LinkTarget::Uri(uri) => json!({ "uri": uri }),
+        LinkTarget::Page { index, y } => json!({ "page": index, "y": y }),
+    }
+}
+
+fn semantic_json(page: &SemanticPage) -> Value {
+    let blocks: Vec<Value> = page
+        .blocks
+        .iter()
+        .map(|block| {
+            let kind = match block.kind {
+                SemanticKind::Paragraph => "paragraph".to_owned(),
+                SemanticKind::Heading(level) => format!("h{level}"),
+                SemanticKind::ListItem => "list_item".to_owned(),
+                SemanticKind::Caption => "caption".to_owned(),
+            };
+            let spans: Vec<Value> = block
+                .spans
+                .iter()
+                .map(|span| {
+                    json!({
+                        "text": span.text,
+                        "bold": span.style.bold,
+                        "italic": span.style.italic,
+                        "monospace": span.style.monospace,
+                        "size": span.size,
+                        "link": span.link
+                    })
+                })
+                .collect();
+            json!({
+                "kind": kind,
+                "bbox": block.bbox,
+                "spans": spans
+            })
+        })
+        .collect();
+    let images: Vec<Value> = page
+        .images
+        .iter()
+        .map(|image| {
+            let object = image
+                .object
+                .map(|id| format!("{} {}", id.number(), id.generation()));
+            json!({
+                "bbox": image.bbox,
+                "object": object,
+                "width": image.width,
+                "height": image.height,
+                "inline": image.inline
+            })
+        })
+        .collect();
+    let links: Vec<Value> = page
+        .links
+        .iter()
+        .map(|link| {
+            json!({
+                "bbox": link.bbox,
+                "target": target_json(&link.target)
+            })
+        })
+        .collect();
+    json!({
+        "index": page.index,
+        "width": page.width,
+        "height": page.height,
+        "blocks": blocks,
+        "images": images,
+        "links": links,
+        "refusal": page.refusal
+    })
+}
+
+fn snippet(text: &str, folded_offset: usize) -> String {
+    let mut folded_bytes = 0usize;
+    let mut position = 0usize;
+    for character in text.chars() {
+        let length: usize = character.to_lowercase().map(char::len_utf8).sum();
+        if folded_bytes.saturating_add(length) > folded_offset {
+            break;
+        }
+        folded_bytes = folded_bytes.saturating_add(length);
+        position = position.saturating_add(1);
+    }
+    let start = position.saturating_sub(48);
+    let mut characters = text.chars().skip(start);
+    let mut result = String::new();
+    if start != 0 {
+        result.push('…');
+    }
+    for character in characters.by_ref().take(192) {
+        result.push(character);
+    }
+    if characters.next().is_some() {
+        result.push('…');
+    }
+    result
+}
+
+fn search(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
+    require_unencrypted(doc)?;
+    let query = string_arg(args, "query")?;
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(refusal(
+            "query_bytes",
+            query.len() as u64,
+            MAX_QUERY_BYTES as u64,
+        ));
+    }
+    let maximum = args
+        .get("max")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "max must be a nonnegative integer".to_owned())?;
+    if maximum > MAX_SEARCH_HITS {
+        return Err(refusal("search_hits", maximum, MAX_SEARCH_HITS));
+    }
+    if query.is_empty() || maximum == 0 {
+        return Ok(json!([]));
+    }
+    let needle = query.to_lowercase();
+    let mut hits = Vec::new();
+
+    for index in 0..doc.pages.len() {
+        // Borrow the fields separately: the page and the resolver are shared,
+        // the font cache is the one mutable piece.
+        let descriptor = doc
+            .pages
+            .get(index)
+            .ok_or_else(|| format!("page index {index} is out of range"))?;
+        let mut resolver = doc.document.resolver();
+        let receipt = page_receipt_cached(&mut resolver, descriptor, &mut doc.font_cache);
+        if let Some(error) = receipt.refusal {
+            match error {
+                error @ (pdf_toolkit::core::DocError::Refused(_)
+                | pdf_toolkit::core::DocError::Encrypted) => {
+                    return Err(pdf_error(error));
+                }
+                error => {
+                    eprintln!("pdf-viewer: skipping search page {index}: {error:?}");
+                    continue;
+                }
+            }
+        }
+        drop(resolver);
+
+        let semantic = semantic_at(doc, index)?;
+        if let Some(reason) = semantic.refusal {
+            return Err(format!("semantic page {index} refused: {reason}"));
+        }
+        for block in semantic.blocks {
+            let mut text = String::new();
+            for span in block.spans {
+                let requested = text.len().saturating_add(span.text.len());
+                if requested > MAX_SEARCH_TEXT_BYTES {
+                    return Err(refusal(
+                        "search_text_bytes",
+                        requested as u64,
+                        MAX_SEARCH_TEXT_BYTES as u64,
+                    ));
+                }
+                text.push_str(&span.text);
+            }
+            let folded = text.to_lowercase();
+            for (offset, _) in folded.match_indices(needle.as_str()) {
+                hits.push(json!({
+                    "page": index,
+                    "snippet": snippet(&text, offset),
+                    "bbox": block.bbox
+                }));
+                if hits.len() as u64 >= maximum {
+                    return Ok(Value::Array(hits));
+                }
+            }
+        }
+    }
+    Ok(Value::Array(hits))
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::new();
+    for chunk in bytes.chunks(3) {
+        let a = chunk.first().copied().unwrap_or(0);
+        let b = chunk.get(1).copied().unwrap_or(0);
+        let c = chunk.get(2).copied().unwrap_or(0);
+        let indices = [
+            a >> 2,
+            ((a & 3) << 4) | (b >> 4),
+            ((b & 15) << 2) | (c >> 6),
+            c & 63,
+        ];
+        for (position, index) in indices.into_iter().enumerate() {
+            if (position == 2 && chunk.len() < 2)
+                || (position == 3 && chunk.len() < 3)
+            {
+                output.push('=');
+            } else if let Some(character) = ALPHABET.get(usize::from(index)) {
+                output.push(char::from(*character));
+            }
+        }
+    }
+    output
+}
+
+fn dispatch(
+    state: &State,
+    handle: &izumo::AppHandle,
+    command: &str,
+    args: Value,
+) -> Result<Value, String> {
+    if !args.is_object() {
+        return Err("command arguments must be an object".to_owned());
+    }
+    if command == "open_file" {
+        let path = string_arg(&args, "path")?;
+        if path.is_empty() {
+            return Err("path must be nonempty".to_owned());
+        }
+        let reply = open_path(state, Path::new(path))?;
+        if let Err(error) = handle.emit("document_opened", &reply) {
+            eprintln!("pdf-viewer: could not announce the opened document: {error}");
+        }
+        return Ok(reply);
+    }
+
+    let mut current = state
+        .lock()
+        .map_err(|_| "the document state is unavailable".to_owned())?;
+    if command == "__viewer_current_document" {
+        return Ok(current
+            .as_ref()
+            .map(|doc| doc.summary.clone())
+            .unwrap_or(Value::Null));
+    }
+    if command == "pick_and_open" {
+        return current
+            .as_ref()
+            .map(|doc| doc.summary.clone())
+            .ok_or_else(|| {
+                "Pass a PDF path to pdf-viewer or drop a local PDF onto the window.".to_owned()
+            });
+    }
+    let doc = current
+        .as_mut()
+        .ok_or_else(|| "open a PDF first".to_owned())?;
+
+    match command {
+        "page_size" => {
+            let (width, height) = dimensions(page(doc, index_arg(&args)?)?)?;
+            Ok(json!({ "width": width, "height": height }))
+        }
+        "render_page" => {
+            let scale = args
+                .get("scale")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| "scale must be a number".to_owned())?;
+            render(doc, index_arg(&args)?, scale)
+        }
+        "thumbnail" => {
+            let index = index_arg(&args)?;
+            let (width, _) = dimensions(page(doc, index)?)?;
+            render(doc, index, THUMBNAIL_WIDTH / width)
+        }
+        "semantic_page" => {
+            let result = semantic_at(doc, index_arg(&args)?)?;
+            Ok(semantic_json(&result))
+        }
+        "page_image" => image(doc, &args),
+        "search" => search(doc, &args),
+        _ => Err(format!("unknown PDF Viewer command: {command}")),
+    }
+}
+
+pub fn table(state: State, handle: izumo::AppHandle) -> Vec<(&'static str, izumo::CommandHandler)> {
+    [
+        "open_file",
+        "pick_and_open",
+        "page_size",
+        "render_page",
+        "semantic_page",
+        "page_image",
+        "search",
+        "thumbnail",
+        "__viewer_current_document",
+    ]
+    .into_iter()
+    .map(|command| {
+        let state = Arc::clone(&state);
+        let handle = handle.clone();
+        let handler: izumo::CommandHandler =
+            Arc::new(move |args| dispatch(&state, &handle, command, args));
+        (command, handler)
+    })
+    .collect()
+}
+

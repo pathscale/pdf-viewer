@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "strict": true,
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
+    "types": [],
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "solid-js": ["./node_modules/solid-js"],
+      "solid-js/*": ["./node_modules/solid-js/*"],
+      "tailwind-merge": ["./node_modules/tailwind-merge"],
+      "~/*": ["./src/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}
+

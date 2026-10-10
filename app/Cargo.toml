@@ -1,0 +1,30 @@
+[package]
+name = "pdf-toolkit-viewer"
+description = "A PDF viewer with page and reading views"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+publish = false
+
+[[bin]]
+name = "pdf-viewer"
+path = "src/main.rs"
+
+[features]
+default = []
+system-fonts = ["blitz-dom/system-fonts", "blitz-script/system-fonts"]
+
+[dependencies]
+pdf-toolkit.workspace = true
+izumo.workspace = true
+blitz-dom = { workspace = true, features = ["woff"] }
+blitz-script.workspace = true
+blitz-traits.workspace = true
+serde_json.workspace = true
+brotli.workspace = true
+nagoya.workspace = true
+
+[build-dependencies]
+brotli.workspace = true
+

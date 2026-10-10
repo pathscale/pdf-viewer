@@ -1,0 +1,127 @@
+@theme inline {
+  --font-sans: var(--viewer-font);
+  --font-mono: var(--viewer-font-mono);
+  --color-base-100: var(--viewer-surface);
+  --color-base-200: var(--viewer-surface-raised);
+  --color-base-300: var(--viewer-border);
+  --color-base-content: var(--viewer-text);
+  --color-primary: var(--viewer-accent);
+  --color-primary-content: var(--viewer-accent-text);
+  --color-secondary: var(--viewer-accent);
+  --color-secondary-content: var(--viewer-accent-text);
+  --color-accent: var(--viewer-accent);
+  --color-accent-content: var(--viewer-accent-text);
+  --color-neutral: var(--viewer-muted);
+  --color-neutral-content: var(--viewer-surface);
+  --color-info: var(--viewer-accent);
+  --color-info-content: var(--viewer-accent-text);
+  --color-success: var(--viewer-success);
+  --color-success-content: var(--viewer-accent-text);
+  --color-warning: var(--viewer-warning);
+  --color-warning-content: var(--viewer-text);
+  --color-error: var(--viewer-danger);
+  --color-error-content: var(--viewer-accent-text);
+}
+
+:root {
+  --viewer-font: "Inter";
+  --viewer-font-mono: "JetBrains Mono";
+  --viewer-font-normal: 400;
+  --viewer-font-medium: 500;
+  --viewer-font-strong: 600;
+  --viewer-font-heading: 700;
+  --viewer-leading: 1.5;
+  --viewer-leading-heading: 1.25;
+  --viewer-disabled-opacity: 0.5;
+
+  --viewer-space-xs: 0.25rem;
+  --viewer-space-sm: 0.5rem;
+  --viewer-space-md: 0.75rem;
+  --viewer-space-lg: 1rem;
+  --viewer-space-xl: 1.5rem;
+  --viewer-space-2xl: 2rem;
+  --viewer-space-3xl: 3rem;
+  --viewer-control-height: 2.25rem;
+  --viewer-icon-size: 1.125rem;
+  --viewer-small-text: 0.75rem;
+  --viewer-control-text: 0.875rem;
+  --viewer-reading-text: 1rem;
+  --viewer-heading-one: 1.875em;
+  --viewer-heading-two: 1.375em;
+  --viewer-heading-three: 1.125em;
+  --viewer-radius: 0.375rem;
+  --viewer-radius-large: 0.75rem;
+  --viewer-focus-width: 0.125rem;
+  --viewer-focus-offset: 0.125rem;
+  --viewer-sidebar-width: 15rem;
+  --viewer-settings-width: 18rem;
+  --viewer-settings-top: 2.75rem;
+  --viewer-search-width: 12rem;
+  --viewer-search-max: 22rem;
+  --viewer-page-input-width: 4rem;
+  --viewer-zoom-width: 3.25rem;
+  --viewer-thumbnail-width: 10rem;
+  --viewer-reading-width: 48rem;
+  --viewer-reading-placeholder: 24rem;
+  --viewer-path-min: 12rem;
+  --viewer-empty-width: 32rem;
+  --viewer-outline-indent: 0.75rem;
+  --viewer-shadow-size: 0 0.25rem 1rem;
+
+  --radius-selector: var(--viewer-radius);
+  --radius-field: var(--viewer-radius);
+  --radius-box: var(--viewer-radius-large);
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+:root,
+:root[data-theme="pdf-viewer"][data-color-mode="light"] {
+  color-scheme: light;
+  --viewer-canvas: #e9edf2;
+  --viewer-surface: #ffffff;
+  --viewer-surface-raised: #f4f6f9;
+  --viewer-text: #182230;
+  --viewer-muted: #596579;
+  --viewer-border: #cbd3de;
+  --viewer-accent: #3157b8;
+  --viewer-accent-text: #ffffff;
+  --viewer-hover: #e8eefb;
+  --viewer-selected: #dde7ff;
+  --viewer-danger: #a82838;
+  --viewer-danger-surface: #fff0f2;
+  --viewer-success: #25654a;
+  --viewer-warning: #af771b;
+  --viewer-paper: #ffffff;
+  --viewer-paper-text: #182230;
+  --viewer-highlight: #ffd34a66;
+  --viewer-highlight-border: #997200;
+  --viewer-shadow-color: #18223020;
+}
+
+:root[data-theme="pdf-viewer"][data-color-mode="dark"] {
+  color-scheme: dark;
+  --viewer-canvas: #10151c;
+  --viewer-surface: #1a222d;
+  --viewer-surface-raised: #222d3a;
+  --viewer-text: #e5ebf4;
+  --viewer-muted: #a8b5c7;
+  --viewer-border: #3a495c;
+  --viewer-accent: #a4bdff;
+  --viewer-accent-text: #14213f;
+  --viewer-hover: #293c5c;
+  --viewer-selected: #314b78;
+  --viewer-danger: #ff9aa7;
+  --viewer-danger-surface: #3f242d;
+  --viewer-success: #83c9a6;
+  --viewer-warning: #e4be72;
+  --viewer-paper: #ffffff;
+  --viewer-paper-text: #182230;
+  --viewer-highlight: #ffd34a66;
+  --viewer-highlight-border: #997200;
+  --viewer-shadow-color: #00000040;
+}
+
