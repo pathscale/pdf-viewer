@@ -275,12 +275,19 @@ fn png_bytes(raster: &Raster) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Inter Regular (OFL, assets/Inter-LICENSE) decoded from WOFF at build time.
+fn fallback_font() -> Arc<[u8]> {
+    static FONT: std::sync::OnceLock<Arc<[u8]>> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| Arc::from(&include_bytes!(concat!(env!("OUT_DIR"), "/fallback.ttf"))[..]))
+        .clone()
+}
+
 fn render(doc: &OpenDoc, index: usize, requested: f64) -> Result<Value, String> {
     require_unencrypted(doc)?;
     let page = page(doc, index)?;
     let (width, height) = dimensions(page)?;
     let scale = capped_scale(width, height, requested)?;
-    let options = RenderOptions { scale: scale as f32, fallback_font: None };
+    let options = RenderOptions { scale: scale as f32, fallback_font: Some(fallback_font()) };
     let mut resolver = doc.document.resolver();
     let raster = pdf_toolkit::raster::render_page(
         &mut resolver,

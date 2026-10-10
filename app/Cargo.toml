@@ -28,4 +28,5 @@ nagoya.workspace = true
 
 [build-dependencies]
 brotli.workspace = true
+miniz_oxide = "^0.8"
 
