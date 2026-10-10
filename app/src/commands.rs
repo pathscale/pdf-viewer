@@ -657,11 +657,16 @@ fn dispatch(
             if !x0.is_finite() || !y0.is_finite() {
                 return Err("the page has an invalid crop box origin".to_owned());
             }
+            let user_unit = descriptor.user_unit;
+            if !user_unit.is_finite() || user_unit <= 0.0 {
+                return Err("the page has an invalid user unit".to_owned());
+            }
             Ok(json!({
                 "width": width,
                 "height": height,
                 "rotate": rotate,
-                "origin": [x0, y0]
+                "origin": [x0, y0],
+                "user_unit": user_unit
             }))
         }
         "render_page" => {

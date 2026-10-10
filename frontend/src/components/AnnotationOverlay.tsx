@@ -3,8 +3,7 @@ import { createSignal } from "solid-js";
 import type { AnnotationInput, PageSize, Point } from "../api";
 import { isMock } from "../api";
 import type { Editor } from "../editing";
-import { bounds, displayRect, displayToPdf, pdfTransform, unrotatedSize } from "../pageCoordinates";
-import { clamp } from "../preferences";
+import { bounds, displayRect, displayToPdf, noteRect, pdfTransform } from "../pageCoordinates";
 import { AnnotationShape } from "./AnnotationShape";
 
 interface Gesture {
@@ -165,12 +164,7 @@ export function AnnotationOverlay(props: {
       opacity: kind === "highlight" ? editor.opacity() : 1,
       width: 2,
     };
-    if (kind === "note") {
-      const dimensions = unrotatedSize(size);
-      const x = clamp(position[0], 0, Math.max(0, dimensions.width - 20));
-      const y = clamp(position[1], Math.min(20, dimensions.height), dimensions.height);
-      input.rect = [x, y - 20, x + 20, y];
-    }
+    if (kind === "note") input.rect = noteRect(position, size);
     if (kind === "free_text") input.size = 12;
     const rect = layer.getBoundingClientRect();
     setGesture({
@@ -182,7 +176,8 @@ export function AnnotationOverlay(props: {
       size,
       revision: editor.revision(),
       interaction: editor.interaction(),
-      tolerance: Math.max(size.width / rect.width, size.height / rect.height) * 1.5,
+      tolerance:
+        (Math.max(size.width / rect.width, size.height / rect.height) * 1.5) / size.user_unit,
     });
     try {
       layer.setPointerCapture(event.pointerId);
@@ -400,3 +395,4 @@ export function AnnotationOverlay(props: {
     </div>
   );
 }
+

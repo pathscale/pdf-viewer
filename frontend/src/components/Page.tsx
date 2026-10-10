@@ -23,7 +23,13 @@ const POINTS_TO_REM = 96 / 72 / 16;
 const MAX_PIXELS = 16_000_000;
 
 export function Page(props: PageProps) {
-  const [size, setSize] = createSignal<PageSize>({ width: 612, height: 792, rotate: 0 });
+  const [size, setSize] = createSignal<PageSize>({
+    width: 612,
+    height: 792,
+    rotate: 0,
+    origin: [0, 0],
+    user_unit: 1,
+  });
   const [raster, setRaster] = createSignal<PageRaster | null>(null);
   const [semantic, setSemantic] = createSignal<SemanticPage | null>(null);
   const [busy, setBusy] = createSignal(false);
