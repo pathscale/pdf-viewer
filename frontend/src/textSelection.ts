@@ -136,3 +136,49 @@ export function selectedText(
   }
   return rows.join("\n");
 }
+
+function glyphWhitespace(text: string): boolean {
+  return /^\s+$/.test(text);
+}
+
+function wordBoundary(line: TextLine, left: number, right: number, height: number): boolean {
+  const leftText = line.text?.[left] ?? "";
+  const rightText = line.text?.[right] ?? "";
+  if (glyphWhitespace(leftText) || glyphWhitespace(rightText)) return true;
+  const leftBox = line.glyphs[left];
+  const rightBox = line.glyphs[right];
+  if (!leftBox || !rightBox) return false;
+  return horizontalGap(leftBox, rightBox) > height * 0.2;
+}
+
+// A word grows until a whitespace glyph or a gap wider than 0.2 of the line height,
+// the same gap selectedText turns into a space.
+export function wordAt(
+  lines: TextLine[],
+  position: GlyphPosition,
+): { anchor: GlyphPosition; endpoint: GlyphPosition } | null {
+  const line = lines[position.line];
+  if (!line || position.glyph < 0 || position.glyph >= line.glyphs.length) return null;
+  if (glyphWhitespace(line.text?.[position.glyph] ?? "")) return null;
+  const height = line.bbox[3] - line.bbox[1];
+  let start = position.glyph;
+  let end = position.glyph;
+  while (start > 0 && !wordBoundary(line, start - 1, start, height)) start -= 1;
+  while (end + 1 < line.glyphs.length && !wordBoundary(line, end, end + 1, height)) end += 1;
+  return {
+    anchor: { line: position.line, glyph: start },
+    endpoint: { line: position.line, glyph: end },
+  };
+}
+
+export function lineAt(
+  lines: TextLine[],
+  position: GlyphPosition,
+): { anchor: GlyphPosition; endpoint: GlyphPosition } | null {
+  const line = lines[position.line];
+  if (!line || position.glyph < 0 || position.glyph >= line.glyphs.length) return null;
+  return {
+    anchor: { line: position.line, glyph: 0 },
+    endpoint: { line: position.line, glyph: line.glyphs.length - 1 },
+  };
+}

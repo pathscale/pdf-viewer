@@ -12,7 +12,14 @@ import {
   pdfTransform,
 } from "../pageCoordinates";
 import type { GlyphPosition } from "../textSelection";
-import { glyphAt, nearestGlyph, selectedText, textFragments } from "../textSelection";
+import {
+  glyphAt,
+  lineAt,
+  nearestGlyph,
+  selectedText,
+  textFragments,
+  wordAt,
+} from "../textSelection";
 import { AnnotationShape } from "./AnnotationShape";
 
 interface Gesture {
@@ -46,6 +53,35 @@ interface TextDrag {
   anchor: GlyphPosition;
   lines: TextLine[];
 }
+
+// The overlay that made the most recent text selection answers Cmd/Ctrl+C anywhere in the
+// window: focus does not reliably stay on the layer after a double or triple click.
+let copySource: (() => string | null) | null = null;
+let copyListening = false;
+
+function listenForCopy(): void {
+  if (copyListening || typeof document === "undefined") return;
+  copyListening = true;
+  document.addEventListener("keydown", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+    if (event.key.toLowerCase() !== "c") return;
+    const target = event.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+    ) {
+      return;
+    }
+    const text = copySource?.();
+    if (!text) return;
+    event.preventDefault();
+    void navigator.clipboard.writeText(text).catch(() => {});
+  });
+}
+
+// A press counts as a repeat click within this time and distance of the previous one.
+const MULTI_CLICK_MS = 500;
+const MULTI_CLICK_PX = 4;
 
 function simplified(points: Point[], tolerance: number): Point[] {
   const first = points[0];
@@ -89,6 +125,13 @@ export function AnnotationOverlay(props: {
   const [textCursor, setTextCursor] = createSignal(false);
   let layer!: HTMLDivElement;
   let contents!: HTMLTextAreaElement;
+  let lastPress: { time: number; x: number; y: number; count: number } | null = null;
+  const copyText = (): string | null => {
+    const range = textSelection();
+    if (!range || (editor.enabled() && editor.tool() !== "select")) return null;
+    return selectedText(range.lines, range.anchor, range.endpoint);
+  };
+  listenForCopy();
   let seenPage = -1;
   let seenTool = "";
   let seenLines: TextLine[] | null = null;
@@ -152,6 +195,33 @@ export function AnnotationOverlay(props: {
       return;
     }
     event.preventDefault();
+    copySource = copyText;
+    // Count clicks here: some engines always report `detail` as 1.
+    const now = performance.now();
+    const near =
+      lastPress !== null &&
+      now - lastPress.time <= MULTI_CLICK_MS &&
+      Math.abs(event.clientX - lastPress.x) <= MULTI_CLICK_PX &&
+      Math.abs(event.clientY - lastPress.y) <= MULTI_CLICK_PX;
+    const clicks = Math.max(event.detail, near && lastPress ? lastPress.count + 1 : 1);
+    lastPress = { time: now, x: event.clientX, y: event.clientY, count: clicks };
+    if (clicks >= 2) {
+      const span = clicks >= 3 ? lineAt(lines, anchor) : wordAt(lines, anchor);
+      setTextSelection({
+        lines,
+        anchor: span?.anchor ?? anchor,
+        endpoint: span?.endpoint ?? anchor,
+      });
+      setTextCursor(true);
+      // Hold the pointer like a drag does, so the release keeps focus here for Cmd/Ctrl+C.
+      try {
+        layer.setPointerCapture(event.pointerId);
+      } catch {
+        // Capture is best effort.
+      }
+      layer.focus({ preventScroll: true });
+      return;
+    }
     setTextSelection({ lines, anchor, endpoint: anchor });
     setTextDrag({ pointer: event.pointerId, anchor, lines });
     setTextCursor(true);
@@ -461,22 +531,6 @@ export function AnnotationOverlay(props: {
         if (!textDrag()) setTextCursor(false);
       }}
       onKeyDown={(event) => {
-        if (
-          event.target === layer &&
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey &&
-          !event.shiftKey &&
-          event.key.toLowerCase() === "c"
-        ) {
-          const range = textSelection();
-          if (range && (!editor.enabled() || editor.tool() === "select")) {
-            event.preventDefault();
-            event.stopPropagation();
-            const copied = selectedText(range.lines, range.anchor, range.endpoint);
-            void navigator.clipboard.writeText(copied).catch(() => {});
-          }
-          return;
-        }
         if (event.key === "Escape") {
           cancel();
           setTextSelection(null);
