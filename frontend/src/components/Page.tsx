@@ -113,8 +113,9 @@ export function Page(props: PageProps) {
           const page = await schedule(() => api.semanticPage(props.index), valid);
           if (valid()) setSemantic(page);
         } else {
-          if (props.editor.enabled() && textLines() === null) {
-            const lines = await schedule(() => api.textLines(props.index), valid);
+          if (textLines() === null) {
+            // A page whose text layer fails still renders; it just has nothing to select.
+            const lines = await schedule(() => api.textLines(props.index), valid).catch(() => []);
             if (!valid()) return;
             setTextLines(lines);
           }

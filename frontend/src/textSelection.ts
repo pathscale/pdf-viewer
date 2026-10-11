@@ -58,8 +58,7 @@ export function textFragments(
   size: PageSize,
 ): { rect: Bbox; quads: Quad[] } {
   const backward =
-    anchor.line > endpoint.line ||
-    (anchor.line === endpoint.line && anchor.glyph > endpoint.glyph);
+    anchor.line > endpoint.line || (anchor.line === endpoint.line && anchor.glyph > endpoint.glyph);
   const first = backward ? endpoint : anchor;
   const last = backward ? anchor : endpoint;
   const quads: Quad[] = [];
@@ -86,4 +85,54 @@ export function textFragments(
     corners.push(tl, tr, bl, br);
   }
   return { rect: bounds(corners), quads };
+}
+
+function horizontalGap(a: [number, number], b: [number, number]): number {
+  return Math.max(a[0] - b[1], b[0] - a[1], 0);
+}
+
+function edgeWhitespace(text: string, fromEnd: boolean): boolean {
+  return fromEnd ? /\s$/.test(text) : /^\s/.test(text);
+}
+
+// Same inclusive reading-order span as textFragments. Lines join with newlines.
+// A wide horizontal gap becomes one space unless either facing edge is already whitespace.
+export function selectedText(
+  lines: TextLine[],
+  anchor: GlyphPosition,
+  endpoint: GlyphPosition,
+): string {
+  const backward =
+    anchor.line > endpoint.line || (anchor.line === endpoint.line && anchor.glyph > endpoint.glyph);
+  const first = backward ? endpoint : anchor;
+  const last = backward ? anchor : endpoint;
+  const rows: string[] = [];
+  for (let index = first.line; index <= last.line; index++) {
+    const line = lines[index];
+    if (!line) continue;
+    const start = index === first.line ? first.glyph : 0;
+    const end = index === last.line ? last.glyph : line.glyphs.length - 1;
+    const height = line.bbox[3] - line.bbox[1];
+    let row = "";
+    for (let glyph = start; glyph <= end; glyph++) {
+      const box = line.glyphs[glyph];
+      if (!box) continue;
+      const piece = line.text?.[glyph] ?? "";
+      if (glyph > start) {
+        const previousBox = line.glyphs[glyph - 1];
+        const previous = line.text?.[glyph - 1] ?? "";
+        if (
+          previousBox &&
+          horizontalGap(previousBox, box) > height * 0.2 &&
+          !edgeWhitespace(previous, true) &&
+          !edgeWhitespace(piece, false)
+        ) {
+          row += " ";
+        }
+      }
+      row += piece;
+    }
+    rows.push(row);
+  }
+  return rows.join("\n");
 }

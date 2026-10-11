@@ -37,6 +37,7 @@ fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
             .get(line.glyphs.start as usize..line.glyphs.end as usize)
             .ok_or_else(|| "the text layer has an invalid glyph range".to_owned())?;
         let mut boxes = Vec::with_capacity(ids.len());
+        let mut characters = Vec::with_capacity(ids.len());
         for &id in ids {
             let glyph = text.glyphs
                 .get(id as usize)
@@ -49,6 +50,12 @@ fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
             let x1 = glyph.x.max(end);
             if x0 < x1 {
                 boxes.push([x0, x1]);
+                // One string per kept box. An unmapped font has no Unicode characters.
+                characters.push(if glyph.mapped {
+                    glyph.text.as_slice().iter().copied().collect::<String>()
+                } else {
+                    "\u{FFFD}".to_owned()
+                });
             }
         }
         if boxes.is_empty() {
@@ -61,7 +68,7 @@ fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
             ));
         }
         // Preserve the layout's reading order and each line's glyph order.
-        lines.push(json!({ "bbox": bbox, "glyphs": boxes }));
+        lines.push(json!({ "bbox": bbox, "glyphs": boxes, "text": characters }));
     }
     Ok(Value::Array(lines))
 }

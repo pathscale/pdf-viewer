@@ -46,11 +46,13 @@ export interface SearchHit {
   bbox: Bbox;
 }
 
-// Lines and glyphs are in reading order, in unrotated PDF user space.
+// Lines and glyphs are in reading order, in display space (origin top left, y down, page_size units).
 // A glyph shares its line's y0/y1 and supplies its own x0/x1.
+// text[i] is the characters for glyphs[i].
 export interface TextLine {
   bbox: Bbox;
   glyphs: [number, number][];
+  text: string[];
 }
 
 export interface SemanticSpan {
@@ -181,4 +183,3 @@ export interface ViewerApi {
     handler: (payload: ViewerEvents[K]) => void,
   ): Promise<Unlisten>;
 }
-

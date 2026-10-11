@@ -350,10 +350,17 @@ export function createMockApi(): ViewerApi {
       // Two plausible lines of 12-point text, each glyph 6 units wide, in PDF user space.
       const page = requirePage(index);
       const top = page.height - 72;
+      const samples = [
+        "This two-page document runs entirely in ",
+        "Reading view displays semantic text here",
+      ];
       return [0, 1].map((row) => {
         const y1 = top - row * 16;
-        const glyphs: [number, number][] = Array.from({ length: 40 }, (_, i) => [72 + i * 6, 78 + i * 6]);
-        return { bbox: [72, y1 - 12, 312, y1] as Bbox, glyphs };
+        const glyphs: [number, number][] = Array.from({ length: 40 }, (_, i) => [
+          72 + i * 6,
+          78 + i * 6,
+        ]);
+        return { bbox: [72, y1 - 12, 312, y1] as Bbox, glyphs, text: [...(samples[row] ?? "")] };
       });
     },
     async renderPage(index, scale) {

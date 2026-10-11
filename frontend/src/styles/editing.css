@@ -85,6 +85,15 @@ textarea:focus-visible,
   cursor: default;
 }
 
+.annotation-overlay.text-selectable {
+  pointer-events: auto;
+  cursor: default;
+}
+
+.annotation-overlay.text-cursor {
+  cursor: text;
+}
+
 .annotation-preview,
 .thumbnail-annotations {
   position: absolute;
@@ -92,6 +101,10 @@ textarea:focus-visible,
   display: block;
   width: 100%;
   height: 100%;
+  pointer-events: none;
+}
+
+.text-selection {
   pointer-events: none;
 }
 

@@ -1,5 +1,5 @@
 import { Button } from "@pathscale/ui";
-import { createSignal } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 import type { AnnotationInput, PageSize, Point, TextLine } from "../api";
 import { isMock } from "../api";
 import type { Editor } from "../editing";
@@ -12,7 +12,7 @@ import {
   pdfTransform,
 } from "../pageCoordinates";
 import type { GlyphPosition } from "../textSelection";
-import { glyphAt, nearestGlyph, textFragments } from "../textSelection";
+import { glyphAt, nearestGlyph, selectedText, textFragments } from "../textSelection";
 import { AnnotationShape } from "./AnnotationShape";
 
 interface Gesture {
@@ -32,6 +32,19 @@ interface Draft {
   input: AnnotationInput;
   revision: number;
   interaction: number;
+}
+
+// Local text selection only. It is never submitted as an annotation.
+interface TextRange {
+  lines: TextLine[];
+  anchor: GlyphPosition;
+  endpoint: GlyphPosition;
+}
+
+interface TextDrag {
+  pointer: number;
+  anchor: GlyphPosition;
+  lines: TextLine[];
 }
 
 function simplified(points: Point[], tolerance: number): Point[] {
@@ -71,8 +84,15 @@ export function AnnotationOverlay(props: {
   const [gesture, setGesture] = createSignal<Gesture | null>(null);
   const [draft, setDraft] = createSignal<Draft | null>(null);
   const [text, setText] = createSignal("");
+  const [textSelection, setTextSelection] = createSignal<TextRange | null>(null);
+  const [textDrag, setTextDrag] = createSignal<TextDrag | null>(null);
+  const [textCursor, setTextCursor] = createSignal(false);
   let layer!: HTMLDivElement;
   let contents!: HTMLTextAreaElement;
+  let seenPage = -1;
+  let seenTool = "";
+  let seenLines: TextLine[] | null = null;
+  let seenLinesSet = false;
 
   function current(value: { revision: number; interaction: number }): boolean {
     return (
@@ -87,16 +107,19 @@ export function AnnotationOverlay(props: {
     return value && current(value) ? value : null;
   }
 
-  function point(event: PointerEvent, size: PageSize): Point | null {
+  function displayPoint(event: PointerEvent, size: PageSize): Point | null {
     const rect = layer.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    return displayToPdf(
-      [
-        ((event.clientX - rect.left) / rect.width) * size.width,
-        ((event.clientY - rect.top) / rect.height) * size.height,
-      ],
-      size,
-    );
+    return [
+      ((event.clientX - rect.left) / rect.width) * size.width,
+      ((event.clientY - rect.top) / rect.height) * size.height,
+    ];
+  }
+
+  function point(event: PointerEvent, size: PageSize): Point | null {
+    const display = displayPoint(event, size);
+    if (!display) return null;
+    return displayToPdf(display, size);
   }
 
   function release(pointer: number): void {
@@ -111,7 +134,102 @@ export function AnnotationOverlay(props: {
     const value = gesture();
     setGesture(null);
     if (value) release(value.pointer);
+    const drag = textDrag();
+    setTextDrag(null);
+    if (drag) release(drag.pointer);
   }
+
+  function beginText(event: PointerEvent): void {
+    const lines = props.lines();
+    if (!lines?.length) {
+      setTextSelection(null);
+      return;
+    }
+    const display = displayPoint(event, props.size());
+    const anchor = display ? glyphAt(lines, display) : null;
+    if (!anchor) {
+      setTextSelection(null);
+      return;
+    }
+    event.preventDefault();
+    setTextSelection({ lines, anchor, endpoint: anchor });
+    setTextDrag({ pointer: event.pointerId, anchor, lines });
+    setTextCursor(true);
+    try {
+      layer.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer cancellation still discards the unfinished gesture.
+    }
+    layer.focus({ preventScroll: true });
+  }
+
+  function moveText(event: PointerEvent): void {
+    const drag = textDrag();
+    if (!drag || drag.pointer !== event.pointerId) return;
+    const display = displayPoint(event, props.size());
+    if (!display) return;
+    const endpoint = nearestGlyph(drag.lines, display) ?? drag.anchor;
+    event.preventDefault();
+    setTextSelection({ lines: drag.lines, anchor: drag.anchor, endpoint });
+  }
+
+  function finishText(event: PointerEvent): boolean {
+    const drag = textDrag();
+    if (!drag || drag.pointer !== event.pointerId) return false;
+    moveText(event);
+    setTextDrag(null);
+    release(event.pointerId);
+    hover(event);
+    return true;
+  }
+
+  function hover(event: PointerEvent): void {
+    if (textDrag()) {
+      if (!textCursor()) setTextCursor(true);
+      return;
+    }
+    if (editor.enabled() && editor.tool() !== "select") {
+      if (textCursor()) setTextCursor(false);
+      return;
+    }
+    const lines = props.lines();
+    const display = lines?.length ? displayPoint(event, props.size()) : null;
+    const next = !!display && !!lines && glyphAt(lines, display) !== null;
+    if (next !== textCursor()) setTextCursor(next);
+  }
+
+  function selectionFragments() {
+    const range = textSelection();
+    if (!range || (editor.enabled() && editor.tool() !== "select")) return [];
+    const { lines, anchor, endpoint } = range;
+    if (!lines[anchor.line] || !lines[endpoint.line]) return [];
+    // PDF-space quads, drawn inside the pdfTransform group like the highlight preview.
+    return textFragments(lines, anchor, endpoint, props.size()).quads;
+  }
+
+  // Solid 2: the compute half tracks the inputs; the effect half clears a stale selection.
+  createEffect(
+    () => ({
+      page: props.index,
+      tool: editor.tool(),
+      allow: !editor.enabled() || editor.tool() === "select",
+      lines: props.lines(),
+    }),
+    ({ page, tool, allow, lines }) => {
+      const changed =
+        seenLinesSet && (page !== seenPage || tool !== seenTool || !allow || lines !== seenLines);
+      seenPage = page;
+      seenTool = tool;
+      seenLines = lines;
+      seenLinesSet = true;
+      if (!changed) return;
+      setTextSelection(null);
+      setTextCursor(false);
+      const drag = textDrag();
+      setTextDrag(null);
+      if (drag) release(drag.pointer);
+    },
+  );
 
   function build(value: Gesture): AnnotationInput {
     const input = { ...value.input };
@@ -137,16 +255,13 @@ export function AnnotationOverlay(props: {
   }
 
   function start(event: PointerEvent): void {
-    if (
-      !editor.enabled() ||
-      editor.busy() ||
-      !props.ready() ||
-      activeDraft() ||
-      gesture() ||
-      event.button !== 0 ||
-      !event.isPrimary
-    )
+    if (event.button !== 0 || !event.isPrimary) return;
+    if (!editor.enabled()) {
+      if (textDrag()) return;
+      beginText(event);
       return;
+    }
+    if (editor.busy() || !props.ready() || activeDraft() || gesture() || textDrag()) return;
     const lines = props.lines();
     if (editor.tool() === "highlight" && lines === null) return;
     const size = { ...props.size() };
@@ -166,10 +281,12 @@ export function AnnotationOverlay(props: {
           position[1] <= Math.max(y0, y1)
         ) {
           editor.select(props.index, item.index);
+          setTextSelection(null);
           return;
         }
       }
       editor.clearSelection();
+      beginText(event);
       return;
     }
     editor.clearSelection();
@@ -235,6 +352,7 @@ export function AnnotationOverlay(props: {
   }
 
   function finish(event: PointerEvent): void {
+    if (finishText(event)) return;
     const initial = gesture();
     if (!initial || initial.pointer !== event.pointerId) return;
     move(event, true);
@@ -250,8 +368,7 @@ export function AnnotationOverlay(props: {
         !input.rect.every(Number.isFinite) ||
         x0 >= x1 ||
         y0 >= y1 ||
-        Math.hypot(value.end[0] - value.start[0], value.end[1] - value.start[1]) <
-          value.tolerance
+        Math.hypot(value.end[0] - value.start[0], value.end[1] - value.start[1]) < value.tolerance
       )
         return;
     } else if (input.kind === "ink") {
@@ -318,6 +435,8 @@ export function AnnotationOverlay(props: {
         "annotation-overlay": true,
         active: editor.enabled() && props.ready(),
         selecting: editor.tool() === "select",
+        "text-selectable": !editor.enabled() && props.ready() && (props.lines()?.length || 0) > 0,
+        "text-cursor": textCursor(),
       }}
       role={placing() ? "button" : "group"}
       aria-label={
@@ -330,13 +449,37 @@ export function AnnotationOverlay(props: {
         layer = element;
       }}
       onPointerDown={start}
-      onPointerMove={(event) => move(event)}
+      onPointerMove={(event) => {
+        move(event);
+        moveText(event);
+        hover(event);
+      }}
       onPointerUp={finish}
       onPointerCancel={cancel}
       onLostPointerCapture={cancel}
+      onPointerLeave={() => {
+        if (!textDrag()) setTextCursor(false);
+      }}
       onKeyDown={(event) => {
+        if (
+          event.target === layer &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          event.key.toLowerCase() === "c"
+        ) {
+          const range = textSelection();
+          if (range && (!editor.enabled() || editor.tool() === "select")) {
+            event.preventDefault();
+            event.stopPropagation();
+            const copied = selectedText(range.lines, range.anchor, range.endpoint);
+            void navigator.clipboard.writeText(copied).catch(() => {});
+          }
+          return;
+        }
         if (event.key === "Escape") {
           cancel();
+          setTextSelection(null);
           setDraft(null);
           editor.clearSelection();
           event.preventDefault();
@@ -359,6 +502,18 @@ export function AnnotationOverlay(props: {
               )
             : null}
           {preview() ? <AnnotationShape input={preview() as AnnotationInput} /> : null}
+          <g
+            class="text-selection"
+            fill="rgb(66,133,244)"
+            opacity="0.35"
+            style={{ "mix-blend-mode": "multiply" }}
+          >
+            {selectionFragments().map((quad) => (
+              <polygon
+                points={`${quad[0]},${quad[1]} ${quad[2]},${quad[3]} ${quad[6]},${quad[7]} ${quad[4]},${quad[5]}`}
+              />
+            ))}
+          </g>
         </g>
         {selectedRect() ? (
           <rect
@@ -432,4 +587,3 @@ export function AnnotationOverlay(props: {
     </div>
   );
 }
-
