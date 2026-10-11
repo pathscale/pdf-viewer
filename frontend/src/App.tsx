@@ -5,6 +5,7 @@ import { api, isMock } from "./api";
 import { EditingToolbar } from "./components/EditingToolbar";
 import { AnnotationSidebar, InsertPdf, PropertiesDialog } from "./components/EditorPanels";
 import { IconButton } from "./components/IconButton";
+import { PasswordDialog } from "./components/PasswordDialog";
 import { Page } from "./components/Page";
 import { Thumbnail } from "./components/Thumbnail";
 import { createEditor } from "./editing";
@@ -23,6 +24,11 @@ export function App() {
   const [opening, setOpening] = createSignal(false);
   const [error, setError] = createSignal("");
   const [pathPrompt, setPathPrompt] = createSignal(false);
+  const [passwordPrompt, setPasswordPrompt] = createSignal<{
+    path: string;
+    fileName: string;
+  } | null>(null);
+  const [passwordError, setPasswordError] = createSignal("");
   const [query, setQuery] = createSignal("");
   const [results, setResults] = createSignal<SearchHit[]>([]);
   const [searching, setSearching] = createSignal(false);
@@ -221,6 +227,8 @@ export function App() {
     setCurrentPage(0);
     setError("");
     setPathPrompt(false);
+    setPasswordPrompt(null);
+    setPasswordError("");
     setInfo(documentInfo);
     editor.reset();
     // The embedded engine exposes document.title read-only; a throw here would
@@ -252,9 +260,55 @@ export function App() {
       if (!disposed) {
         if (pendingDocument) adoptDocument(pendingDocument);
         else {
-          setError(message(reason));
-          setPathPrompt(true);
-          later(() => pathInput?.focus());
+          const text = message(reason);
+          if (path !== undefined && text.toLowerCase().includes("encrypted")) {
+            setError("");
+            setPathPrompt(false);
+            setPasswordPrompt({
+              path,
+              fileName: path.split(/[\\/]/).pop() || path,
+            });
+            setPasswordError("");
+          } else {
+            setError(text);
+            setPathPrompt(true);
+            later(() => pathInput?.focus());
+          }
+        }
+      }
+    } finally {
+      pendingDocument = null;
+      if (!disposed) setOpening(false);
+    }
+  }
+
+  async function openWithPassword(password: string): Promise<void> {
+    const prompt = passwordPrompt();
+    const openFileWithPassword = api.openFileWithPassword;
+    if (!prompt || opening()) return;
+    if (!openFileWithPassword) {
+      setPasswordError("Encrypted PDF opening is unavailable");
+      return;
+    }
+
+    setOpening(true);
+    setError("");
+    setPasswordError("");
+    pendingDocument = null;
+    try {
+      const documentInfo = await schedule(
+        () => openFileWithPassword(prompt.path, password),
+        () => !disposed,
+      );
+      if (!disposed) adoptDocument(pendingDocument || documentInfo);
+    } catch (reason) {
+      if (!disposed) {
+        if (pendingDocument) adoptDocument(pendingDocument);
+        else {
+          const text = message(reason);
+          setPasswordError(
+            text === "Incorrect password" ? "Incorrect password. Please try again." : text,
+          );
         }
       }
     } finally {
@@ -588,6 +642,20 @@ export function App() {
 
       {editor.enabled() ? <EditingToolbar editor={editor} /> : null}
       {editor.propertiesOpen() ? <PropertiesDialog editor={editor} /> : null}
+      {passwordPrompt() ? (
+        <PasswordDialog
+          fileName={passwordPrompt()?.fileName || ""}
+          busy={opening()}
+          error={passwordError()}
+          onSubmit={(password) => {
+            void openWithPassword(password);
+          }}
+          onCancel={() => {
+            setPasswordPrompt(null);
+            setPasswordError("");
+          }}
+        />
+      ) : null}
 
       {pathPrompt() ? (
         <form

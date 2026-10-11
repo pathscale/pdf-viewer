@@ -157,6 +157,7 @@ export interface ViewerEvents {
 
 export interface ViewerApi {
   openFile(path: string): Promise<DocumentInfo>;
+  openFileWithPassword?(path: string, password: string): Promise<DocumentInfo>;
   pickAndOpen(): Promise<DocumentInfo>;
   pageSize(index: number): Promise<PageSize>;
   renderPage(index: number, scale: number): Promise<PageRaster>;
@@ -178,6 +179,7 @@ export interface ViewerApi {
   undo(): Promise<EditState>;
   redo(): Promise<EditState>;
   save(mode: SaveMode): Promise<{ path: string }>;
+  saveEncryptedCopy?(path: string, password: string): Promise<{ path: string }>;
   on<K extends keyof ViewerEvents>(
     event: K,
     handler: (payload: ViewerEvents[K]) => void,

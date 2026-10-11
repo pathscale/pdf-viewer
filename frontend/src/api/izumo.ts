@@ -37,6 +37,8 @@ export function createIzumoApi(): ViewerApi {
 
   return {
     openFile: (path) => izumo.invoke<DocumentInfo>("open_file", { path }),
+    openFileWithPassword: (path, password) =>
+      izumo.invoke<DocumentInfo>("open_file_with_password", { path, password }),
     pickAndOpen: () => izumo.invoke<DocumentInfo>("pick_and_open", {}),
     pageSize: (index) => izumo.invoke<PageSize>("page_size", { index }),
     renderPage: (index, scale) => izumo.invoke<PageRaster>("render_page", { index, scale }),
@@ -60,6 +62,8 @@ export function createIzumoApi(): ViewerApi {
     undo: () => izumo.invoke<EditState>("undo", {}),
     redo: () => izumo.invoke<EditState>("redo", {}),
     save: (mode) => izumo.invoke<{ path: string }>("save", { mode }),
+    saveEncryptedCopy: (path, password) =>
+      izumo.invoke<{ path: string }>("save_encrypted_copy", { path, password }),
     on<K extends keyof ViewerEvents>(
       event: K,
       handler: (payload: ViewerEvents[K]) => void,

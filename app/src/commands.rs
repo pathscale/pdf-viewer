@@ -1,11 +1,12 @@
-use std::fs::File;
-use std::io::Read;
+use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::editing::{self, History};
 use pdf_toolkit::core::pages::{Page, PageWalk};
-use pdf_toolkit::core::{Document, Limits, ObjectRef, OpenMode, PdfSource};
+use pdf_toolkit::core::{Document, Limits, ObjectRef, OpenMode, PdfSource, XrefEntry};
 use pdf_toolkit::raster::{encode_png, Raster};
 use pdf_toolkit::render::RenderOptions;
 use pdf_toolkit::text::extract::page_receipt_cached;
@@ -19,6 +20,9 @@ const MAX_PIXELS: u64 = 16_000_000;
 const MAX_SEARCH_HITS: u64 = 10_000;
 const MAX_QUERY_BYTES: usize = 4096;
 const MAX_SEARCH_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PATH_BYTES: usize = 4096;
+const MAX_PASSWORD_BYTES: usize = 1024 * 1024;
+const MAX_ENCRYPTED_OBJECTS: u32 = 1_000_000;
 const THUMBNAIL_WIDTH: f64 = 160.0;
 
 pub type State = Arc<Mutex<Option<OpenDoc>>>;
@@ -40,6 +44,22 @@ fn refusal(kind: &str, requested: u64, maximum: u64) -> String {
 
 pub(crate) fn pdf_error(error: pdf_toolkit::core::DocError) -> String {
     format!("{error:?}")
+}
+
+fn open_error(error: pdf_toolkit::core::DocError, password_supplied: bool) -> String {
+    let wrong_password = password_supplied
+        && match &error {
+            pdf_toolkit::core::DocError::Encrypted => true,
+            pdf_toolkit::core::DocError::Malformed { what, .. } => {
+                what.contains("password") || what.contains("authentication")
+            }
+            _ => false,
+        };
+    if wrong_password {
+        "Incorrect password".to_owned()
+    } else {
+        pdf_error(error)
+    }
 }
 
 /// A source over the shared bytes; fails only when there is no PDF header.
@@ -85,6 +105,14 @@ pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
 }
 
 pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
+    open_path_with_password(state, path, None)
+}
+
+fn open_path_with_password(
+    state: &State,
+    path: &Path,
+    password: Option<&[u8]>,
+) -> Result<Value, String> {
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -93,7 +121,7 @@ pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
             .join(path)
     };
     let bytes = read_source(&path)?;
-    let opened = open_bytes(bytes, path)?;
+    let opened = open_bytes_with_password(bytes, path, password)?;
     let summary = opened.summary.clone();
 
     let mut current = state
@@ -104,11 +132,24 @@ pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
 }
 
 pub(crate) fn open_bytes(bytes: Arc<[u8]>, path: PathBuf) -> Result<OpenDoc, String> {
+    open_bytes_with_password(bytes, path, None)
+}
+
+fn open_bytes_with_password(
+    bytes: Arc<[u8]>,
+    path: PathBuf,
+    password: Option<&[u8]>,
+) -> Result<OpenDoc, String> {
     let limits = Limits::default();
     // Repair mode tries the strict open first; damaged files (broken xref, object streams or
     // page tree) fall back to the recovering reader instead of being refused.
-    let document = Document::open_with(source(&bytes)?, limits, OpenMode::Repair)
-        .map_err(pdf_error)?;
+    let document = Document::open_with_password_mode(
+        source(&bytes)?,
+        limits,
+        OpenMode::Repair,
+        password,
+    )
+    .map_err(|error| open_error(error, password.is_some()))?;
     let encrypted = document.encrypted();
 
     let pages = {
@@ -222,6 +263,14 @@ pub(crate) fn require_unencrypted(doc: &OpenDoc) -> Result<(), String> {
     }
 }
 
+fn require_decryptable(doc: &OpenDoc) -> Result<(), String> {
+    if doc.document.decryptable() {
+        Ok(())
+    } else {
+        Err("encrypted documents cannot be decoded".to_owned())
+    }
+}
+
 fn capped_scale(width: f64, height: f64, requested: f64) -> Result<f32, String> {
     if !requested.is_finite() || requested <= 0.0 {
         return Err("scale must be finite and positive".to_owned());
@@ -285,7 +334,7 @@ fn fallback_font() -> Arc<[u8]> {
 }
 
 fn render(doc: &OpenDoc, index: usize, requested: f64) -> Result<Value, String> {
-    require_unencrypted(doc)?;
+    require_decryptable(doc)?;
     let page = page(doc, index)?;
     let (width, height) = dimensions(page)?;
     let scale = capped_scale(width, height, requested)?;
@@ -324,7 +373,7 @@ fn object_arg(args: &Value) -> Result<ObjectRef, String> {
 }
 
 fn image(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
-    require_unencrypted(doc)?;
+    require_decryptable(doc)?;
     let mut resolver = doc.document.resolver();
     let image = load_image(&mut resolver, object_arg(args)?, MAX_PIXELS)
         .map_err(pdf_error)?;
@@ -585,6 +634,259 @@ fn base64(bytes: &[u8]) -> String {
     output
 }
 
+fn writer_name(bytes: Vec<u8>) -> Result<String, String> {
+    String::from_utf8(bytes)
+        .map_err(|_| "PDF names must be UTF-8 to save an encrypted copy".to_owned())
+}
+
+fn writer_value(
+    value: pdf_toolkit::core::ValueRef<'_>,
+    references: &BTreeMap<u32, u32>,
+) -> Result<pdf_toolkit::write::Value, String> {
+    use pdf_toolkit::core::ValueKind;
+    use pdf_toolkit::write::Value as WriteValue;
+
+    match value.kind() {
+        ValueKind::Null => Ok(WriteValue::Null),
+        ValueKind::Bool => Ok(WriteValue::Bool(
+            value
+                .as_bool()
+                .ok_or_else(|| "PDF boolean value is invalid".to_owned())?,
+        )),
+        ValueKind::Int => Ok(WriteValue::Int(
+            value
+                .as_i64()
+                .ok_or_else(|| "PDF integer value is invalid".to_owned())?,
+        )),
+        ValueKind::Real => {
+            let number = value
+                .as_f64()
+                .ok_or_else(|| "PDF real value is invalid".to_owned())?;
+            if !number.is_finite() {
+                return Err("PDF real value is not finite".to_owned());
+            }
+            Ok(WriteValue::Real(number))
+        }
+        ValueKind::Name => {
+            let name = value
+                .as_name()
+                .ok_or_else(|| "PDF name value is invalid".to_owned())?;
+            Ok(WriteValue::Name(writer_name(name.decoded().into_owned())?))
+        }
+        ValueKind::String => {
+            let string = value
+                .as_str()
+                .ok_or_else(|| "PDF string value is invalid".to_owned())?;
+            Ok(WriteValue::Str(string.decode()))
+        }
+        ValueKind::Array => {
+            let array = value
+                .as_array()
+                .ok_or_else(|| "PDF array value is invalid".to_owned())?;
+            let mut values = Vec::new();
+            for item in array.iter() {
+                values.push(writer_value(item, references)?);
+            }
+            Ok(WriteValue::Array(values))
+        }
+        ValueKind::Dict => {
+            let dictionary = value
+                .as_dict()
+                .ok_or_else(|| "PDF dictionary value is invalid".to_owned())?;
+            let mut values = Vec::new();
+            for (key, item) in dictionary.iter() {
+                values.push((
+                    writer_name(key.decoded().into_owned())?,
+                    writer_value(item, references)?,
+                ));
+            }
+            Ok(WriteValue::Dict(values))
+        }
+        ValueKind::Ref => {
+            let id = value
+                .as_ref()
+                .ok_or_else(|| "PDF reference value is invalid".to_owned())?;
+            let number = references
+                .get(&id.number())
+                .copied()
+                .ok_or_else(|| format!("PDF reference {} is missing", id.number()))?;
+            Ok(WriteValue::Ref(number, 0))
+        }
+    }
+}
+
+fn encrypted_pdf(doc: &OpenDoc, password: &[u8]) -> Result<Vec<u8>, String> {
+    let object_count = doc.document.xref().size().saturating_sub(1);
+    if object_count > MAX_ENCRYPTED_OBJECTS {
+        return Err(refusal(
+            "encrypted_objects",
+            u64::from(object_count),
+            u64::from(MAX_ENCRYPTED_OBJECTS),
+        ));
+    }
+
+    let mut writer = pdf_toolkit::write::Writer::new_encrypted("2.0", password, None)
+        .map_err(|error| error.to_string())?;
+    let mut references = BTreeMap::new();
+    let mut objects = Vec::new();
+    let capacity = usize::try_from(object_count)
+        .map_err(|_| refusal("encrypted_objects", u64::from(object_count), u64::from(MAX_ENCRYPTED_OBJECTS)))?;
+    objects
+        .try_reserve_exact(capacity)
+        .map_err(|_| refusal("encrypted_objects", u64::from(object_count), u64::from(MAX_ENCRYPTED_OBJECTS)))?;
+
+    for number in 1..doc.document.xref().size() {
+        let source_id = match doc.document.xref().get(number) {
+            Some(XrefEntry::InUse { generation, .. }) => ObjectRef::new(number, generation),
+            Some(XrefEntry::Compressed { .. }) => ObjectRef::new(number, 0),
+            Some(XrefEntry::Free) | None => continue,
+        };
+        let destination = writer.alloc().map_err(|error| error.to_string())?;
+        references.insert(number, destination);
+        objects.push((source_id, destination));
+    }
+
+    let root = doc
+        .document
+        .root_ref()
+        .ok_or_else(|| "the PDF has no catalog".to_owned())?;
+    let root = references
+        .get(&root.number())
+        .copied()
+        .ok_or_else(|| "the PDF catalog is missing".to_owned())?;
+
+    let mut resolver = doc.document.resolver();
+    for (source_id, destination) in objects {
+        let object = resolver.get(source_id).map_err(pdf_error)?;
+        let value = writer_value(object.root(), &references)?;
+        match (object.is_stream(), value) {
+            (true, pdf_toolkit::write::Value::Dict(dictionary)) => {
+                let data = object
+                    .stream_raw()
+                    .ok_or_else(|| "PDF stream data is unavailable".to_owned())?;
+                writer
+                    .stream(destination, dictionary, data)
+                    .map_err(|error| error.to_string())?;
+            }
+            (true, _) => return Err("PDF stream dictionary is invalid".to_owned()),
+            (false, value) => {
+                writer
+                    .object(destination, &value)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let written = writer.bytes().len() as u64;
+        if written > MAX_SOURCE_BYTES {
+            return Err(refusal("source_bytes", written, MAX_SOURCE_BYTES));
+        }
+    }
+
+    let mut extra = Vec::new();
+    if let Some(trailer) = doc.document.trailer().dict() {
+        for (key, value) in trailer.iter() {
+            let key = writer_name(key.decoded().into_owned())?;
+            if matches!(
+                key.as_str(),
+                "Root" | "Size" | "Encrypt" | "ID" | "Prev" | "XRefStm"
+            ) {
+                continue;
+            }
+            extra.push((key, writer_value(value, &references)?));
+        }
+    }
+    writer
+        .finish_table(root, extra)
+        .map_err(|error| error.to_string())?;
+    let bytes = writer.into_bytes();
+    if bytes.len() as u64 > MAX_SOURCE_BYTES {
+        return Err(refusal(
+            "source_bytes",
+            bytes.len() as u64,
+            MAX_SOURCE_BYTES,
+        ));
+    }
+    Ok(bytes)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut temporary_name = path.as_os_str().to_os_string();
+    temporary_name.push(".tmp");
+    let temporary = PathBuf::from(temporary_name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
+    let result = (|| {
+        match fs::metadata(path) {
+            Ok(metadata) => file
+                .set_permissions(metadata.permissions())
+                .map_err(|error| format!("could not preserve file permissions: {error}"))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("could not inspect the save path: {error}")),
+        }
+        file.write_all(bytes)
+            .map_err(|error| format!("could not write PDF: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("could not flush PDF: {error}"))?;
+        drop(file);
+        fs::rename(&temporary, path)
+            .map_err(|error| format!("could not replace {}: {error}", path.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn save_encrypted_copy(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
+    require_unencrypted(doc)?;
+    let path_text = string_arg(args, "path")?;
+    if path_text.is_empty() {
+        return Err("path must be nonempty".to_owned());
+    }
+    if path_text.len() > MAX_PATH_BYTES {
+        return Err(refusal(
+            "path_bytes",
+            path_text.len() as u64,
+            MAX_PATH_BYTES as u64,
+        ));
+    }
+    let password = string_arg(args, "password")?;
+    if password.is_empty() {
+        return Err("password must be nonempty".to_owned());
+    }
+    if password.len() > MAX_PASSWORD_BYTES {
+        return Err(refusal(
+            "password_bytes",
+            password.len() as u64,
+            MAX_PASSWORD_BYTES as u64,
+        ));
+    }
+
+    let path = Path::new(path_text);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("could not locate the current directory: {error}"))?
+            .join(path)
+    };
+    let state = editing::edit_state(doc);
+    if state
+        .get("path")
+        .and_then(Value::as_str)
+        .is_some_and(|source| Path::new(source) == path.as_path())
+    {
+        return Err("choose a new path for the encrypted copy".to_owned());
+    }
+
+    let bytes = encrypted_pdf(doc, password.as_bytes())?;
+    atomic_write(&path, &bytes)?;
+    Ok(json!({ "path": path.to_string_lossy() }))
+}
+
 fn dispatch(
     state: &State,
     handle: &izumo::AppHandle,
@@ -600,6 +902,29 @@ fn dispatch(
             return Err("path must be nonempty".to_owned());
         }
         let reply = open_path(state, Path::new(path))?;
+        if let Err(error) = handle.emit("document_opened", &reply) {
+            eprintln!("pdf-viewer: could not announce the opened document: {error}");
+        }
+        return Ok(reply);
+    }
+    if command == "open_file_with_password" {
+        let path = string_arg(&args, "path")?;
+        if path.is_empty() {
+            return Err("path must be nonempty".to_owned());
+        }
+        let password = string_arg(&args, "password")?;
+        if password.len() > MAX_PASSWORD_BYTES {
+            return Err(refusal(
+                "password_bytes",
+                password.len() as u64,
+                MAX_PASSWORD_BYTES as u64,
+            ));
+        }
+        let reply = open_path_with_password(
+            state,
+            Path::new(path),
+            Some(password.as_bytes()),
+        )?;
         if let Err(error) = handle.emit("document_opened", &reply) {
             eprintln!("pdf-viewer: could not announce the opened document: {error}");
         }
@@ -637,6 +962,10 @@ fn dispatch(
     let doc = current
         .as_mut()
         .ok_or_else(|| "open a PDF first".to_owned())?;
+
+    if command == "save_encrypted_copy" {
+        return save_encrypted_copy(doc, &args);
+    }
 
     if editing::handles(command) {
         let (reply, changed) = editing::dispatch(doc, command, &args)?;
@@ -697,6 +1026,7 @@ fn dispatch(
 pub fn table(state: State, handle: izumo::AppHandle) -> Vec<(&'static str, izumo::CommandHandler)> {
     [
         "open_file",
+        "open_file_with_password",
         "pick_and_open",
         "page_size",
         "render_page",
@@ -717,6 +1047,7 @@ pub fn table(state: State, handle: izumo::AppHandle) -> Vec<(&'static str, izumo
         "undo",
         "redo",
         "save",
+        "save_encrypted_copy",
         "__viewer_current_document",
     ]
     .into_iter()
@@ -729,4 +1060,3 @@ pub fn table(state: State, handle: izumo::AppHandle) -> Vec<(&'static str, izumo
     })
     .collect()
 }
-
