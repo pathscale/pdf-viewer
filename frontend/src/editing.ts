@@ -188,6 +188,15 @@ export function createEditor(options: EditorOptions) {
     });
   }
 
+  function saveEncryptedCopy(path: string, password: string): Promise<boolean> {
+    return run(async () => {
+      const save = api.saveEncryptedCopy;
+      if (!save) throw new Error("Encrypted PDF saving is unavailable");
+      const reply = await save(path, password);
+      if (!disposed) setStatus(`Saved encrypted copy to ${reply.path}`);
+    });
+  }
+
   function keydown(event: KeyboardEvent): boolean {
     if (!options.available()) return false;
     const target = event.target;
@@ -307,6 +316,8 @@ export function createEditor(options: EditorOptions) {
     undo,
     redo,
     save,
+    saveEncryptedCopy,
+    encryptedSaveAvailable: () => api.saveEncryptedCopy !== undefined,
     keydown,
     openProperties: () =>
       run(async () => {
