@@ -266,6 +266,52 @@ textarea:focus-visible,
   gap: var(--viewer-space-md);
 }
 
+.encrypted-save-dialog form > label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--viewer-space-sm);
+  width: 100%;
+}
+
+.encrypted-save-field .viewer-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.encrypted-save-dialog .encrypted-save-warning,
+.encrypted-save-dialog .encrypted-save-error {
+  display: block;
+  max-width: 100%;
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.encrypted-save-dialog .encrypted-save-confirmation {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--viewer-space-sm);
+}
+
+.encrypted-save-confirmation input[type="checkbox"] {
+  flex: none;
+}
+
+.encrypted-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--viewer-space-sm);
+}
+
+.encrypted-save-actions > .viewer-button {
+  flex: none;
+  width: max-content;
+  white-space: nowrap;
+}
+
 .editing-save-status {
   max-width: 24rem;
   overflow: hidden;

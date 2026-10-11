@@ -25,8 +25,17 @@ const COLORS: { name: string; css: string; value: Color }[] = [
 
 function encryptedPath(path: string | null): string {
   const source = path || "document.pdf";
-  const stem = source.replace(/\.pdf$/i, "");
-  return `${stem}.encrypted.pdf`;
+  const separator = Math.max(source.lastIndexOf("/"), source.lastIndexOf("\\"));
+  const directory = source.slice(0, separator + 1);
+  const fileName = source.slice(separator + 1) || "document.pdf";
+  const stem = fileName.replace(/\.pdf$/i, "") || "document";
+  return `${directory}${stem}-encrypted.pdf`;
+}
+
+function saveErrorText(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return "Could not save the encrypted PDF.";
 }
 
 export function EditingToolbar(props: { editor: Editor }) {
@@ -149,6 +158,7 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
   const [password, setPassword] = createSignal("");
   const [confirmation, setConfirmation] = createSignal("");
   const [understood, setUnderstood] = createSignal(false);
+  const [saveError, setSaveError] = createSignal("");
   let panel!: HTMLDivElement;
   let passwordInput!: HTMLInputElement;
 
@@ -166,14 +176,23 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
 
   async function submit(): Promise<void> {
     if (!canSave() || editor.busy()) return;
-    const success = await editor.saveEncryptedCopy(path().trim(), password());
-    if (success) props.onClose();
+    setSaveError("");
+    try {
+      const success = await editor.saveEncryptedCopy(path().trim(), password());
+      if (success) {
+        props.onClose();
+      } else {
+        setSaveError("Could not save the encrypted PDF.");
+      }
+    } catch (error) {
+      setSaveError(saveErrorText(error));
+    }
   }
 
   return (
     <div class="properties-backdrop">
       <div
-        class="properties-dialog"
+        class="properties-dialog encrypted-save-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="encrypted-save-heading"
@@ -210,7 +229,7 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
             void submit();
           }}
         >
-          <label>
+          <label class="encrypted-save-field">
             <span>Encrypted PDF path</span>
             <input
               class="viewer-input"
@@ -222,7 +241,7 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
               onInput={(event) => setPath(event.currentTarget.value)}
             />
           </label>
-          <label>
+          <label class="encrypted-save-field">
             <span>Encryption password</span>
             <input
               class="viewer-input"
@@ -238,7 +257,7 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
               onInput={(event) => setPassword(event.currentTarget.value)}
             />
           </label>
-          <label>
+          <label class="encrypted-save-field">
             <span>Confirm encryption password</span>
             <input
               class="viewer-input"
@@ -251,11 +270,11 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
               onInput={(event) => setConfirmation(event.currentTarget.value)}
             />
           </label>
-          <p class="error-banner" role="alert">
+          <p class="error-banner encrypted-save-warning" role="alert">
             Only this viewer and chuzz can open the encrypted file. Acrobat, Preview, web browsers
             and other PDF apps will not open it.
           </p>
-          <label>
+          <label class="encrypted-save-confirmation">
             <input
               type="checkbox"
               aria-label="I understand"
@@ -265,7 +284,12 @@ function EncryptedSaveDialog(props: { editor: Editor; onClose: () => void }) {
             />
             <span>I understand</span>
           </label>
-          <div class="editing-tools">
+          {saveError() ? (
+            <p class="error-banner encrypted-save-error" role="alert">
+              {saveError()}
+            </p>
+          ) : null}
+          <div class="editing-tools encrypted-save-actions">
             <Button
               type="submit"
               class="viewer-button"
