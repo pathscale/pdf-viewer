@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::editing::{self, History};
 use pdf_toolkit::core::pages::{Page, PageWalk};
-use pdf_toolkit::core::{Document, Limits, ObjectRef, PdfSource};
+use pdf_toolkit::core::{Document, Limits, ObjectRef, OpenMode, PdfSource};
 use pdf_toolkit::raster::{encode_png, Raster};
 use pdf_toolkit::render::RenderOptions;
 use pdf_toolkit::text::extract::page_receipt_cached;
@@ -105,7 +105,9 @@ pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
 
 pub(crate) fn open_bytes(bytes: Arc<[u8]>, path: PathBuf) -> Result<OpenDoc, String> {
     let limits = Limits::default();
-    let document = Document::open(source(&bytes)?, limits)
+    // Repair mode tries the strict open first; damaged files (broken xref, object streams or
+    // page tree) fall back to the recovering reader instead of being refused.
+    let document = Document::open_with(source(&bytes)?, limits, OpenMode::Repair)
         .map_err(pdf_error)?;
     let encrypted = document.encrypted();
 
@@ -132,7 +134,7 @@ pub(crate) fn open_bytes(bytes: Arc<[u8]>, path: PathBuf) -> Result<OpenDoc, Str
         None
     } else {
         Some(
-            SemanticReader::open(source(&bytes)?, limits)
+            SemanticReader::open_with(source(&bytes)?, limits, OpenMode::Repair)
                 .map_err(pdf_error)?,
         )
     };
@@ -349,9 +351,10 @@ fn semantic_at(doc: &mut OpenDoc, index: usize) -> Result<SemanticPage, String> 
 
     if doc.semantic.is_none() || index < doc.semantic_next {
         doc.semantic = Some(
-            SemanticReader::open(
+            SemanticReader::open_with(
                 source(&doc.bytes)?,
                 *doc.document.limits(),
+                OpenMode::Repair,
             )
             .map_err(pdf_error)?,
         );
