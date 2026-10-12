@@ -9,6 +9,7 @@
     "dev": "rsbuild dev",
     "start": "rsbuild dev",
     "build": "tsc --noEmit && rsbuild build",
+    "crate": "bun run build && mkdir -p ../app/ui && cp dist/index.html dist/app.js dist/app.css ../app/ui/",
     "preview": "rsbuild preview",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",

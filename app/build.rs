@@ -67,11 +67,15 @@ fn embed() -> io::Result<()> {
         .ok_or_else(|| io::Error::other("CARGO_MANIFEST_DIR is missing"))?;
     let output = std::env::var_os("OUT_DIR")
         .ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
-    let dist = PathBuf::from(manifest).join("../frontend/dist");
+    // The repo builds from frontend/dist; the published crate carries the same bundle in ui/.
+    let manifest = PathBuf::from(manifest);
+    let repo_dist = manifest.join("../frontend/dist");
+    let dist = if repo_dist.join("index.html").is_file() { repo_dist } else { manifest.join("ui") };
     let output = PathBuf::from(output);
 
     println!("cargo:rerun-if-changed=../frontend");
     println!("cargo:rerun-if-changed=../frontend/dist");
+    println!("cargo:rerun-if-changed=ui");
     for name in ["index.html", "app.js", "app.css"] {
         println!("cargo:rerun-if-changed=../frontend/dist/{name}");
     }
