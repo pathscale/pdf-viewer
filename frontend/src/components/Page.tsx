@@ -113,12 +113,7 @@ export function Page(props: PageProps) {
           const page = await schedule(() => api.semanticPage(props.index), valid);
           if (valid()) setSemantic(page);
         } else {
-          if (textLines() === null) {
-            // A page whose text layer fails still renders; it just has nothing to select.
-            const lines = await schedule(() => api.textLines(props.index), valid).catch(() => []);
-            if (!valid()) return;
-            setTextLines(lines);
-          }
+          // Paint first; the text layer for selection follows.
           const dimensions = size();
           const requested = preferences.zoom * preferences.fontScale * (96 / 72) * deviceScale();
           const scale = Math.min(
@@ -126,7 +121,13 @@ export function Page(props: PageProps) {
             Math.sqrt(MAX_PIXELS / (dimensions.width * dimensions.height)),
           );
           const image = await schedule(() => api.renderPage(props.index, scale), valid);
-          if (valid()) setRaster(image);
+          if (!valid()) return;
+          setRaster(image);
+          if (textLines() === null) {
+            // A page whose text layer fails still renders; it just has nothing to select.
+            const lines = await schedule(() => api.textLines(props.index), valid).catch(() => []);
+            if (valid()) setTextLines(lines);
+          }
         }
         if (valid()) completedKey = key;
       } catch (reason) {

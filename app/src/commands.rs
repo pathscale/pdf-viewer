@@ -132,12 +132,12 @@ pub(crate) fn bench_first_page(path: &Path) -> Result<Value, String> {
     let height = size["height"]
         .as_f64()
         .ok_or_else(|| "the page has invalid display dimensions".to_owned())?;
-    // Match Page.tsx: a failed text layer still permits rendering.
-    let _ = crate::text_lines::extract(doc, 0);
     // Default page view: zoom, font scale and device scale are all one.
     let scale = (96.0_f64 / 72.0).min((MAX_PIXELS as f64 / (width * height)).sqrt());
     render(doc, 0, scale)?;
     let first_page_ms = started.elapsed().as_secs_f64() * 1000.0;
+    // Match Page.tsx: the text layer loads after the first paint.
+    let _ = crate::text_lines::extract(doc, 0);
 
     Ok(json!({
         "file": path.to_string_lossy(),
