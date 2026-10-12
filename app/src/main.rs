@@ -4,6 +4,8 @@ mod commands;
 mod data_url;
 mod editing;
 mod frontend;
+#[cfg(target_os = "macos")]
+mod macos;
 mod text_lines;
 
 use std::sync::{Arc, Mutex};
@@ -37,8 +39,22 @@ fn window_spec() -> izumo::WindowSpec {
 fn run() -> izumo::AppResult {
     let _runtime = nagoya::runtime::background();
     let state: commands::State = Arc::new(Mutex::new(None));
+
+    #[cfg(not(target_os = "macos"))]
     let mut startup = None;
 
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(path) = std::env::args_os().nth(1) {
+            macos::enqueue_path(std::path::PathBuf::from(path));
+        }
+        if let Err(error) = macos::register_open_document_handler() {
+            eprintln!("pdf-viewer: {error}");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
     if let Some(path) = std::env::args_os().nth(1) {
         match commands::open_path(&state, std::path::Path::new(&path)) {
             Ok(reply) => startup = Some(reply),
@@ -50,8 +66,12 @@ fn run() -> izumo::AppResult {
 
     let builder = izumo::App::builder().manage(Arc::clone(&state));
     let handle = builder.handle();
-    let mut command_table = commands::table(Arc::clone(&state), handle);
-    command_table.push(("text_lines", text_lines::handler(state)));
+
+    #[cfg(target_os = "macos")]
+    macos::set_delivery_target(Arc::clone(&state), handle.clone());
+
+    let mut command_table = commands::table(Arc::clone(&state), handle.clone());
+    command_table.push(("text_lines", text_lines::handler(Arc::clone(&state))));
 
     builder
         .commands(command_table)
@@ -71,6 +91,9 @@ fn run() -> izumo::AppResult {
                 .map_err(|error| format!("could not enable agent control: {error}"))?;
             }
             app.show()?;
+            #[cfg(target_os = "macos")]
+            macos::window_is_ready();
+            #[cfg(not(target_os = "macos"))]
             if let Some(reply) = startup {
                 app.emit("document_opened", reply)?;
             }
@@ -80,6 +103,38 @@ fn run() -> izumo::AppResult {
 }
 
 fn main() {
+    let first_argument = std::env::args_os().nth(1);
+
+    #[cfg(target_os = "macos")]
+    {
+        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--install-app")) {
+            if let Err(error) = macos::install_app() {
+                eprintln!("pdf-viewer: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--uninstall-app")) {
+            if let Err(error) = macos::uninstall_app() {
+                eprintln!("pdf-viewer: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--install-app")) {
+            eprintln!("pdf-viewer: --install-app is macOS-only");
+            std::process::exit(1);
+        }
+        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--uninstall-app")) {
+            eprintln!("pdf-viewer: --uninstall-app is macOS-only");
+            std::process::exit(1);
+        }
+    }
+
     if let Err(error) = run() {
         eprintln!("pdf-viewer: {error}");
         std::process::exit(1);
