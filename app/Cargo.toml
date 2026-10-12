@@ -6,7 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 build = "build.rs"
-publish = false
+readme = "../README.md"
+keywords = ["pdf", "viewer", "reader"]
+categories = ["gui"]
+include = ["src/**", "assets/**", "ui/**", "build.rs", "Cargo.toml"]
 
 [[bin]]
 name = "pdf-viewer"

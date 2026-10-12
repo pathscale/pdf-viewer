@@ -8,5 +8,18 @@ reflowed like a web page: headings, paragraphs, links, images). Outline, thumbna
 highlights, notes, freehand ink, text boxes, rectangles and ellipses, page rotation, reordering, deletion and
 insertion, document properties and undo; saving appends one incremental revision so the original bytes stay intact.
 
+## Install
+
+```sh
+cargo install pdf-viewer
+pdf-viewer --install-app
+```
+
+On macOS, `--install-app` writes `~/Applications/PDF Viewer.app` around the installed binary and makes it the
+default app for PDF files; run it again after upgrading. `--uninstall-app` removes it. `pdf-viewer FILE.pdf` opens a
+file directly on any platform.
+
+## License
+
 MIT. Text in unembedded standard fonts is drawn with Inter Regular (SIL Open Font License 1.1,
 `app/assets/Inter-LICENSE`), positioned by the PDF's own glyph widths.
