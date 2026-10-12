@@ -84,11 +84,7 @@ export function PasswordDialog(props: PasswordDialogProps) {
             </p>
           ) : null}
           <div class="editing-tools">
-            <Button
-              type="submit"
-              class="viewer-button"
-              disabled={props.busy}
-            >
+            <Button type="submit" class="viewer-button" disabled={props.busy}>
               Open encrypted PDF
             </Button>
             <Button

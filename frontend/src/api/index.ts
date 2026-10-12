@@ -6,4 +6,3 @@ export type * from "./client";
 
 export const isMock = !("__IZUMO__" in window);
 export const api: ViewerApi = isMock ? createMockApi() : createIzumoApi();
-
