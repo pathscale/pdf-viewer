@@ -108,6 +108,45 @@ pub fn open_path(state: &State, path: &Path) -> Result<Value, String> {
     open_path_with_password(state, path, None)
 }
 
+pub(crate) fn bench_first_page(path: &Path) -> Result<Value, String> {
+    let state: State = Arc::new(Mutex::new(None));
+    let started = std::time::Instant::now();
+    open_path(&state, path)?;
+    let open_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let current = state
+        .lock()
+        .map_err(|_| "the document state is unavailable".to_owned())?;
+    let doc = current
+        .as_ref()
+        .ok_or_else(|| "open a PDF first".to_owned())?;
+    let pages = doc.pages.len();
+    if pages == 0 {
+        return Err("this PDF has no pages to benchmark".to_owned());
+    }
+
+    let size = page_size(doc, 0)?;
+    let width = size["width"]
+        .as_f64()
+        .ok_or_else(|| "the page has invalid display dimensions".to_owned())?;
+    let height = size["height"]
+        .as_f64()
+        .ok_or_else(|| "the page has invalid display dimensions".to_owned())?;
+    // Match Page.tsx: a failed text layer still permits rendering.
+    let _ = crate::text_lines::extract(doc, 0);
+    // Default page view: zoom, font scale and device scale are all one.
+    let scale = (96.0_f64 / 72.0).min((MAX_PIXELS as f64 / (width * height)).sqrt());
+    render(doc, 0, scale)?;
+    let first_page_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(json!({
+        "file": path.to_string_lossy(),
+        "open_ms": open_ms,
+        "first_page_ms": first_page_ms,
+        "pages": pages
+    }))
+}
+
 fn open_path_with_password(
     state: &State,
     path: &Path,
@@ -253,6 +292,30 @@ fn dimensions(page: &Page) -> Result<(f64, f64), String> {
     } else {
         Ok((width, height))
     }
+}
+
+fn page_size(doc: &OpenDoc, index: usize) -> Result<Value, String> {
+    let descriptor = page(doc, index)?;
+    let (width, height) = dimensions(descriptor)?;
+    let rotate = descriptor.rotate.rem_euclid(360);
+    if !matches!(rotate, 0 | 90 | 180 | 270) {
+        return Err("the page has an invalid rotation".to_owned());
+    }
+    let [x0, y0, _, _] = descriptor.crop_box;
+    if !x0.is_finite() || !y0.is_finite() {
+        return Err("the page has an invalid crop box origin".to_owned());
+    }
+    let user_unit = descriptor.user_unit;
+    if !user_unit.is_finite() || user_unit <= 0.0 {
+        return Err("the page has an invalid user unit".to_owned());
+    }
+    Ok(json!({
+        "width": width,
+        "height": height,
+        "rotate": rotate,
+        "origin": [x0, y0],
+        "user_unit": user_unit
+    }))
 }
 
 pub(crate) fn require_unencrypted(doc: &OpenDoc) -> Result<(), String> {
@@ -978,29 +1041,7 @@ fn dispatch(
     }
 
     match command {
-        "page_size" => {
-            let descriptor = page(doc, index_arg(&args)?)?;
-            let (width, height) = dimensions(descriptor)?;
-            let rotate = descriptor.rotate.rem_euclid(360);
-            if !matches!(rotate, 0 | 90 | 180 | 270) {
-                return Err("the page has an invalid rotation".to_owned());
-            }
-            let [x0, y0, _, _] = descriptor.crop_box;
-            if !x0.is_finite() || !y0.is_finite() {
-                return Err("the page has an invalid crop box origin".to_owned());
-            }
-            let user_unit = descriptor.user_unit;
-            if !user_unit.is_finite() || user_unit <= 0.0 {
-                return Err("the page has an invalid user unit".to_owned());
-            }
-            Ok(json!({
-                "width": width,
-                "height": height,
-                "rotate": rotate,
-                "origin": [x0, y0],
-                "user_unit": user_unit
-            }))
-        }
+        "page_size" => page_size(doc, index_arg(&args)?),
         "render_page" => {
             let scale = args
                 .get("scale")

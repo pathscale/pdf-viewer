@@ -8,6 +8,7 @@ mod frontend;
 mod macos;
 mod text_lines;
 
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 pub(crate) fn document_changed(handle: &izumo::AppHandle, pages: usize) {
@@ -138,7 +139,26 @@ fn main() {
         }
     }
 
-    if let Err(error) = run() {
+    let result = if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--bench-first-page"))
+    {
+        (|| {
+            let mut args = std::env::args_os().skip(2);
+            let path = args.next().ok_or_else(|| {
+                "usage: pdf-viewer --bench-first-page <file.pdf>".to_owned()
+            })?;
+            if args.next().is_some() {
+                return Err("usage: pdf-viewer --bench-first-page <file.pdf>".to_owned());
+            }
+            let reply = commands::bench_first_page(std::path::Path::new(&path))?;
+            writeln!(std::io::stdout().lock(), "{reply}")
+                .map_err(|error| format!("could not write benchmark result: {error}"))
+        })()
+    } else {
+        run().map_err(|error| error.to_string())
+    };
+
+    if let Err(error) = result {
         eprintln!("pdf-viewer: {error}");
         std::process::exit(1);
     }

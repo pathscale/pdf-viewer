@@ -8,7 +8,7 @@ use crate::commands::{self, OpenDoc, State};
 const MAX_LINES: usize = 4096;
 const MAX_GLYPHS: usize = 65_536;
 
-fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
+pub(crate) fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
     commands::require_unencrypted(doc)?;
     let page = commands::page(doc, index)?;
     let mut resolver = doc.document.resolver();

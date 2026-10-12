@@ -23,3 +23,12 @@ file directly on any platform.
 
 MIT. Text in unembedded standard fonts is drawn with Inter Regular (SIL Open Font License 1.1,
 `app/assets/Inter-LICENSE`), positioned by the PDF's own glyph widths.
+
+Run `pdf-viewer --bench-first-page <file.pdf>` to measure the first page without creating a window or
+event loop. On success it prints one JSON line with `file`, `open_ms`, `first_page_ms` and `pages`.
+`file` is the supplied path. Both durations are milliseconds from the start of opening: `open_ms`
+ends after the normal open and parse path, and `first_page_ms` ends after page-size validation,
+text-layer extraction and first-page rendering, including PNG encoding and base64 conversion.
+Rendering uses the default page-view settings at device scale one and the normal pixel limit.
+A text-layer failure still permits rendering, as in the window. Invalid arguments, open or render
+failures, and documents without pages report an error on stderr and exit with status one.
