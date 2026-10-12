@@ -26,6 +26,12 @@ serde_json.workspace = true
 brotli.workspace = true
 nagoya.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "^0.6"
+objc2-foundation = "^0.3"
+objc2-app-kit = "^0.3"
+block2 = "^0.6"
+
 [build-dependencies]
 brotli.workspace = true
 miniz_oxide = "^0.8"
