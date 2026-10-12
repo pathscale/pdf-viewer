@@ -78,6 +78,8 @@ a {
   align-items: center;
   gap: var(--viewer-space-sm);
   padding: var(--viewer-space-sm) var(--viewer-space-md);
+  /* The window buttons sit over the toolbar row (overlay title bar); clear them as chuzz does. */
+  padding-left: 6rem;
   border-bottom: 1px solid var(--viewer-border);
   background: var(--viewer-surface);
 }
