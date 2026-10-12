@@ -28,6 +28,7 @@ blitz-traits.workspace = true
 serde_json.workspace = true
 brotli.workspace = true
 nagoya.workspace = true
+rusty_alloc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "^0.6"

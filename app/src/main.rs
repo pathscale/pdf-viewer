@@ -102,6 +102,9 @@ fn run() -> izumo::AppResult {
         .run()
 }
 
+#[global_allocator]
+static ALLOC: rusty_alloc::RustyAlloc = rusty_alloc::RustyAlloc;
+
 fn main() {
     let first_argument = std::env::args_os().nth(1);
 
