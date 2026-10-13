@@ -144,7 +144,7 @@ fn schedule_pending_paths() {
         return;
     };
 
-    let _ = nagoya::runtime::background().spawn(async move {
+    drop(nagoya::runtime::background().spawn(async move {
         loop {
             let Some(path) = take_latest_path() else {
                 DELIVERY_RUNNING.store(false, Ordering::Release);
@@ -163,7 +163,7 @@ fn schedule_pending_paths() {
                 Err(error) => eprintln!("pdf-viewer: {error}"),
             }
         }
-    });
+    }));
 }
 
 fn paths_from_event(event: &AnyObject) -> Vec<PathBuf> {

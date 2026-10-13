@@ -398,7 +398,7 @@ fn render(doc: &OpenDoc, index: usize, requested: f64) -> Result<Value, String> 
     let (width, height) = dimensions(page)?;
     let scale = capped_scale(width, height, requested)?;
     let options = RenderOptions {
-        scale: scale as f32,
+        scale,
         fallback_font: Some(fallback_font()),
     };
     let mut resolver = doc.document.resolver();
