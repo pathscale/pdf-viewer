@@ -13,8 +13,7 @@ impl blitz_script::ScriptFetcher for EmbeddedScriptFetcher {
             && url.host_str() == Some("ui")
             && url.path().ends_with("/app.js")
         {
-            decompress(JS_BR, JS_LEN, "JavaScript")
-                .map_err(blitz_script::FetchError::InvalidData)
+            decompress(JS_BR, JS_LEN, "JavaScript").map_err(blitz_script::FetchError::InvalidData)
         } else {
             Err(blitz_script::FetchError::InvalidData(format!(
                 "the embedded interface has no script at {url}"
@@ -33,7 +32,9 @@ fn decompress(bytes: &[u8], length: usize, label: &str) -> Result<String, String
         .read_to_string(&mut decoded)
         .map_err(|error| format!("could not decompress embedded {label}: {error}"))?;
     if decoded.len() != length {
-        return Err(format!("embedded {label} length does not match its manifest"));
+        return Err(format!(
+            "embedded {label} length does not match its manifest"
+        ));
     }
     Ok(decoded)
 }
@@ -173,4 +174,3 @@ pub fn document(url: &str) -> Result<blitz_script::ScriptDocument, String> {
     document.eval(SHELL_SHIM);
     Ok(document)
 }
-

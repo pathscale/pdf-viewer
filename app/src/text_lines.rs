@@ -12,8 +12,7 @@ pub(crate) fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
     commands::require_unencrypted(doc)?;
     let page = commands::page(doc, index)?;
     let mut resolver = doc.document.resolver();
-    let text = page_text(&mut resolver, page)
-        .map_err(|error| format!("{error:?}"))?;
+    let text = page_text(&mut resolver, page).map_err(|error| format!("{error:?}"))?;
     if text.glyphs.len() > MAX_GLYPHS {
         return Err(format!(
             "refused: text_glyphs, requested={}, maximum={MAX_GLYPHS}",
@@ -33,13 +32,15 @@ pub(crate) fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
         if bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
             continue;
         }
-        let ids = page_layout.order
+        let ids = page_layout
+            .order
             .get(line.glyphs.start as usize..line.glyphs.end as usize)
             .ok_or_else(|| "the text layer has an invalid glyph range".to_owned())?;
         let mut boxes = Vec::with_capacity(ids.len());
         let mut characters = Vec::with_capacity(ids.len());
         for &id in ids {
-            let glyph = text.glyphs
+            let glyph = text
+                .glyphs
                 .get(id as usize)
                 .ok_or_else(|| "the text layer has an invalid glyph index".to_owned())?;
             let end = glyph.x + glyph.width;
@@ -78,14 +79,16 @@ pub(crate) fn handler(state: State) -> izumo::CommandHandler {
         if !args.is_object() {
             return Err("command arguments must be an object".to_owned());
         }
-        let index = args.get("page_index")
+        let index = args
+            .get("page_index")
             .and_then(Value::as_u64)
             .ok_or_else(|| "page_index must be a nonnegative integer".to_owned())?;
-        let index = usize::try_from(index)
-            .map_err(|_| "page_index is out of range".to_owned())?;
-        let current = state.lock()
+        let index = usize::try_from(index).map_err(|_| "page_index is out of range".to_owned())?;
+        let current = state
+            .lock()
             .map_err(|_| "the document state is unavailable".to_owned())?;
-        let doc = current.as_ref()
+        let doc = current
+            .as_ref()
             .ok_or_else(|| "open a PDF first".to_owned())?;
         extract(doc, index)
     })

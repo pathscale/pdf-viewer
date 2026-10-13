@@ -38,13 +38,34 @@ impl History {
 }
 
 enum EditOp {
-    Annotate { page: u32, annot: Annot },
-    RemoveAnnotation { page: u32, index: usize },
-    Rotate { page: u32, turns: i32 },
-    Delete { page: u32 },
-    Move { from: u32, to: u32 },
-    Insert { source: Arc<[u8]>, pages: Vec<u32>, at: u32 },
-    SetInfo { key: &'static str, text: String },
+    Annotate {
+        page: u32,
+        annot: Annot,
+    },
+    RemoveAnnotation {
+        page: u32,
+        index: usize,
+    },
+    Rotate {
+        page: u32,
+        turns: i32,
+    },
+    Delete {
+        page: u32,
+    },
+    Move {
+        from: u32,
+        to: u32,
+    },
+    Insert {
+        source: Arc<[u8]>,
+        pages: Vec<u32>,
+        at: u32,
+    },
+    SetInfo {
+        key: &'static str,
+        text: String,
+    },
 }
 
 impl EditOp {
@@ -74,7 +95,9 @@ impl EditOp {
                         quads.len().saturating_mul(std::mem::size_of::<[f32; 8]>())
                     }
                     AnnotKind::Ink { paths, .. } => paths.iter().fold(
-                        paths.len().saturating_mul(std::mem::size_of::<Vec<[f32; 2]>>()),
+                        paths
+                            .len()
+                            .saturating_mul(std::mem::size_of::<Vec<[f32; 2]>>()),
                         |total, path| {
                             total.saturating_add(
                                 path.len().saturating_mul(std::mem::size_of::<[f32; 2]>()),
@@ -88,9 +111,9 @@ impl EditOp {
                     .saturating_add(annot.contents.as_ref().map_or(0, String::len))
                     .saturating_add(annot.author.as_ref().map_or(0, String::len))
             }
-            Self::Insert { source, pages, .. } => source.len().saturating_add(
-                pages.len().saturating_mul(std::mem::size_of::<u32>()),
-            ),
+            Self::Insert { source, pages, .. } => source
+                .len()
+                .saturating_add(pages.len().saturating_mul(std::mem::size_of::<u32>())),
             Self::SetInfo { text, .. } => text.len(),
             _ => 0,
         };
@@ -127,7 +150,8 @@ fn optional_text(args: &Value, key: &str) -> Result<Option<String>, String> {
 }
 
 fn usize_arg(args: &Value, key: &str) -> Result<usize, String> {
-    let value = args.get(key)
+    let value = args
+        .get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| format!("{key} must be a nonnegative integer"))?;
     usize::try_from(value).map_err(|_| format!("{key} is out of range"))
@@ -142,7 +166,9 @@ fn page_arg(doc: &OpenDoc, args: &Value, key: &str, allow_end: bool) -> Result<u
 }
 
 fn number(value: &Value, key: &str) -> Result<f32, String> {
-    let value = value.as_f64().ok_or_else(|| format!("{key} must be a number"))?;
+    let value = value
+        .as_f64()
+        .ok_or_else(|| format!("{key} must be a number"))?;
     let converted = value as f32;
     if !value.is_finite() || !converted.is_finite() {
         return Err(format!("{key} must be finite"));
@@ -158,7 +184,9 @@ fn optional_number(args: &Value, key: &str, default: f32) -> Result<f32, String>
 }
 
 fn fixed<const N: usize>(value: &Value, key: &str) -> Result<[f32; N], String> {
-    let values = value.as_array().ok_or_else(|| format!("{key} must be an array"))?;
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("{key} must be an array"))?;
     if values.len() != N {
         return Err(format!("{key} must contain {N} numbers"));
     }
@@ -170,7 +198,9 @@ fn fixed<const N: usize>(value: &Value, key: &str) -> Result<[f32; N], String> {
 }
 
 fn array<'a>(value: &'a Value, key: &str, maximum: usize) -> Result<&'a [Value], String> {
-    let values = value.as_array().ok_or_else(|| format!("{key} must be an array"))?;
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("{key} must be an array"))?;
     if values.len() > maximum {
         return Err(refusal(key, values.len(), maximum));
     }
@@ -188,7 +218,12 @@ fn parse_quads(value: &Value) -> Result<Vec<[f32; 8]>, String> {
 }
 
 fn highlight_rect(quads: &[[f32; 8]]) -> Result<[f32; 4], String> {
-    let mut rect = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    let mut rect = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
     for quad in quads {
         // QuadPoints use top-left, top-right, bottom-left, bottom-right order.
         // Walk the perimeter when checking the area.
@@ -202,8 +237,8 @@ fn highlight_rect(quads: &[[f32; 8]]) -> Result<[f32; 4], String> {
         for index in 0..4 {
             let point = points[index];
             let next = points[(index + 1) % 4];
-            area += f64::from(point[0]) * f64::from(next[1])
-                - f64::from(next[0]) * f64::from(point[1]);
+            area +=
+                f64::from(point[0]) * f64::from(next[1]) - f64::from(next[0]) * f64::from(point[1]);
             rect[0] = rect[0].min(point[0]);
             rect[1] = rect[1].min(point[1]);
             rect[2] = rect[2].max(point[0]);
@@ -214,7 +249,8 @@ fn highlight_rect(quads: &[[f32; 8]]) -> Result<[f32; 4], String> {
         }
     }
     if rect.iter().any(|value| !value.is_finite())
-        || rect[0] >= rect[2] || rect[1] >= rect[3]
+        || rect[0] >= rect[2]
+        || rect[1] >= rect[3]
         || !(rect[2] - rect[0]).is_finite()
         || !(rect[3] - rect[1]).is_finite()
     {
@@ -236,7 +272,12 @@ fn parse_paths(value: &Value) -> Result<Vec<Vec<[f32; 2]>>, String> {
         if count > MAX_INK_POINTS {
             return Err(refusal("ink_points", count, MAX_INK_POINTS));
         }
-        paths.push(points.iter().map(|point| fixed(point, "point")).collect::<Result<_, _>>()?);
+        paths.push(
+            points
+                .iter()
+                .map(|point| fixed(point, "point"))
+                .collect::<Result<_, _>>()?,
+        );
     }
     Ok(paths)
 }
@@ -244,24 +285,31 @@ fn parse_paths(value: &Value) -> Result<Vec<Vec<[f32; 2]>>, String> {
 fn annotation_arg(args: &Value) -> Result<Annot, String> {
     let kind = string_arg(args, "kind")?;
     let mut rect = fixed::<4>(
-        args.get("rect").ok_or_else(|| "rect is required".to_owned())?,
+        args.get("rect")
+            .ok_or_else(|| "rect is required".to_owned())?,
         "rect",
     )?;
-    if rect[0] >= rect[2] || rect[1] >= rect[3]
+    if rect[0] >= rect[2]
+        || rect[1] >= rect[3]
         || !(rect[2] - rect[0]).is_finite()
         || !(rect[3] - rect[1]).is_finite()
     {
         return Err("rect must have finite positive width and height".to_owned());
     }
     let color = fixed::<3>(
-        args.get("color").ok_or_else(|| "color is required".to_owned())?,
+        args.get("color")
+            .ok_or_else(|| "color is required".to_owned())?,
         "color",
     )?;
-    if color.iter().any(|component| !(0.0..=1.0).contains(component)) {
+    if color
+        .iter()
+        .any(|component| !(0.0..=1.0).contains(component))
+    {
         return Err("color components must be in 0..1".to_owned());
     }
     let opacity = number(
-        args.get("opacity").ok_or_else(|| "opacity is required".to_owned())?,
+        args.get("opacity")
+            .ok_or_else(|| "opacity is required".to_owned())?,
         "opacity",
     )?;
     if !(0.0..=1.0).contains(&opacity) {
@@ -297,7 +345,14 @@ fn annotation_arg(args: &Value) -> Result<Annot, String> {
         "circle" => AnnotKind::Circle { width },
         _ => return Err("unknown annotation kind".to_owned()),
     };
-    Ok(Annot { kind, rect, color, opacity, contents, author: None })
+    Ok(Annot {
+        kind,
+        rect,
+        color,
+        opacity,
+        contents,
+        author: None,
+    })
 }
 
 fn annotations_at(doc: &OpenDoc, index: usize) -> Result<Vec<Annotation>, String> {
@@ -311,13 +366,15 @@ fn annotations_at(doc: &OpenDoc, index: usize) -> Result<Vec<Annotation>, String
 fn annotations_json(doc: &OpenDoc, index: usize) -> Result<Value, String> {
     let annotations = annotations_at(doc, index)?
         .into_iter()
-        .map(|annot| json!({
-            "index": annot.index,
-            "subtype": annot.subtype,
-            "rect": annot.rect,
-            "contents": annot.contents,
-            "color": annot.color
-        }))
+        .map(|annot| {
+            json!({
+                "index": annot.index,
+                "subtype": annot.subtype,
+                "rect": annot.rect,
+                "contents": annot.contents,
+                "color": annot.color
+            })
+        })
         .collect();
     Ok(Value::Array(annotations))
 }
@@ -343,20 +400,17 @@ fn rebuild<'a>(
         let bytes = if ops.peek().is_none() {
             Arc::clone(&doc.history.original)
         } else {
-            let mut editor = Editor::open(
-                Arc::clone(&doc.history.original),
-                Limits::default(),
-            ).map_err(|error| format!("{error:?}"))?;
+            let mut editor = Editor::open(Arc::clone(&doc.history.original), Limits::default())
+                .map_err(|error| format!("{error:?}"))?;
             for op in ops {
                 op.apply(&mut editor)?;
             }
-            let bytes: Arc<[u8]> = Arc::from(
-                editor.save().map_err(|error| format!("{error:?}"))?,
-            );
+            let bytes: Arc<[u8]> = Arc::from(editor.save().map_err(|error| format!("{error:?}"))?);
             if bytes.len() as u64 > commands::MAX_SOURCE_BYTES {
                 return Err(format!(
                     "refused: source_bytes, requested={}, maximum={}",
-                    bytes.len(), commands::MAX_SOURCE_BYTES
+                    bytes.len(),
+                    commands::MAX_SOURCE_BYTES
                 ));
             }
             if !bytes.starts_with(doc.history.original.as_ref()) {
@@ -383,13 +437,19 @@ fn prepare_push(doc: &mut OpenDoc, op: &EditOp) -> Result<(), String> {
     if requested > MAX_HISTORY_OPS {
         return Err(refusal("history_ops", requested, MAX_HISTORY_OPS));
     }
-    let bytes = doc.history.ops.iter().fold(op.retained_bytes(), |total, existing| {
-        total.saturating_add(existing.retained_bytes())
-    });
+    let bytes = doc
+        .history
+        .ops
+        .iter()
+        .fold(op.retained_bytes(), |total, existing| {
+            total.saturating_add(existing.retained_bytes())
+        });
     if bytes > MAX_HISTORY_BYTES {
         return Err(refusal("history_bytes", bytes, MAX_HISTORY_BYTES));
     }
-    doc.history.ops.try_reserve(1)
+    doc.history
+        .ops
+        .try_reserve(1)
         .map_err(|_| refusal("history_ops", requested, MAX_HISTORY_OPS))
 }
 
@@ -399,7 +459,8 @@ fn push(doc: &mut OpenDoc, op: EditOp) -> Result<Value, String> {
     let reply = match &op {
         EditOp::Annotate { page, .. } => {
             let annotations = annotations_at(&rebuilt, *page as usize)?;
-            let annotation = annotations.last()
+            let annotation = annotations
+                .last()
                 .ok_or_else(|| "the added annotation could not be read back".to_owned())?;
             json!({ "annotation": annotation.index })
         }
@@ -416,23 +477,39 @@ fn undo(doc: &mut OpenDoc) -> Result<Value, String> {
         return Err("nothing to undo".to_owned());
     }
     let requested = doc.history.undone.len().saturating_add(1);
-    doc.history.undone.try_reserve(1)
+    doc.history
+        .undone
+        .try_reserve(1)
         .map_err(|_| refusal("history_ops", requested, MAX_HISTORY_OPS))?;
     let kept = doc.history.ops.len().saturating_sub(1);
     let rebuilt = rebuild(doc, doc.history.ops.iter().take(kept))?;
-    let op = doc.history.ops.pop().ok_or_else(|| "nothing to undo".to_owned())?;
+    let op = doc
+        .history
+        .ops
+        .pop()
+        .ok_or_else(|| "nothing to undo".to_owned())?;
     doc.history.undone.push(op);
     install(doc, rebuilt);
     Ok(edit_state(doc))
 }
 
 fn redo(doc: &mut OpenDoc) -> Result<Value, String> {
-    let op = doc.history.undone.last().ok_or_else(|| "nothing to redo".to_owned())?;
+    let op = doc
+        .history
+        .undone
+        .last()
+        .ok_or_else(|| "nothing to redo".to_owned())?;
     let rebuilt = rebuild(doc, doc.history.ops.iter().chain(std::iter::once(op)))?;
     let requested = doc.history.ops.len().saturating_add(1);
-    doc.history.ops.try_reserve(1)
+    doc.history
+        .ops
+        .try_reserve(1)
         .map_err(|_| refusal("history_ops", requested, MAX_HISTORY_OPS))?;
-    let op = doc.history.undone.pop().ok_or_else(|| "nothing to redo".to_owned())?;
+    let op = doc
+        .history
+        .undone
+        .pop()
+        .ok_or_else(|| "nothing to redo".to_owned())?;
     doc.history.ops.push(op);
     install(doc, rebuilt);
     Ok(edit_state(doc))
@@ -442,17 +519,23 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut temporary_name = path.as_os_str().to_os_string();
     temporary_name.push(".tmp");
     let temporary = PathBuf::from(temporary_name);
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
         .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
     let result = (|| {
         match fs::metadata(path) {
-            Ok(metadata) => file.set_permissions(metadata.permissions())
+            Ok(metadata) => file
+                .set_permissions(metadata.permissions())
                 .map_err(|error| format!("could not preserve file permissions: {error}"))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("could not inspect the save path: {error}")),
         }
-        file.write_all(bytes).map_err(|error| format!("could not write PDF: {error}"))?;
-        file.sync_all().map_err(|error| format!("could not flush PDF: {error}"))?;
+        file.write_all(bytes)
+            .map_err(|error| format!("could not write PDF: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("could not flush PDF: {error}"))?;
         drop(file);
         fs::rename(&temporary, path)
             .map_err(|error| format!("could not replace {}: {error}", path.display()))?;
@@ -469,7 +552,10 @@ fn save(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
     let path = match mode {
         "in_place" => doc.history.path.clone(),
         "copy" => {
-            let stem = doc.history.path.file_stem()
+            let stem = doc
+                .history
+                .path
+                .file_stem()
                 .ok_or_else(|| "the opened path has no file name".to_owned())?;
             let mut name = stem.to_os_string();
             name.push(".edited.pdf");
@@ -487,10 +573,20 @@ fn save(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
 }
 
 pub(crate) fn handles(command: &str) -> bool {
-    matches!(command,
-        "annotations" | "annotate" | "remove_annotation" | "rotate_page"
-        | "delete_page" | "move_page" | "insert_pdf" | "info" | "set_info"
-        | "undo" | "redo" | "save"
+    matches!(
+        command,
+        "annotations"
+            | "annotate"
+            | "remove_annotation"
+            | "rotate_page"
+            | "delete_page"
+            | "move_page"
+            | "insert_pdf"
+            | "info"
+            | "set_info"
+            | "undo"
+            | "redo"
+            | "save"
     )
 }
 
@@ -503,15 +599,20 @@ pub(crate) fn dispatch(
     let reply = match command {
         "annotations" => return Ok((annotations_json(doc, usize_arg(args, "index")?)?, false)),
         "info" => {
-            let reader = doc.semantic.as_ref()
+            let reader = doc
+                .semantic
+                .as_ref()
                 .ok_or_else(|| "the semantic reader is unavailable".to_owned())?;
             let info = reader.info();
-            return Ok((json!({
-                "title": info.title,
-                "author": info.author,
-                "subject": info.subject,
-                "keywords": info.keywords
-            }), false));
+            return Ok((
+                json!({
+                    "title": info.title,
+                    "author": info.author,
+                    "subject": info.subject,
+                    "keywords": info.keywords
+                }),
+                false,
+            ));
         }
         "annotate" => {
             let page = page_arg(doc, args, "index", false)?;
@@ -525,10 +626,18 @@ pub(crate) fn dispatch(
         }
         "rotate_page" => {
             let page = page_arg(doc, args, "index", false)?;
-            let turns = args.get("quarter_turns").and_then(Value::as_i64)
+            let turns = args
+                .get("quarter_turns")
+                .and_then(Value::as_i64)
                 .and_then(|value| i32::try_from(value).ok())
                 .ok_or_else(|| "quarter_turns must be a signed 32-bit integer".to_owned())?;
-            push(doc, EditOp::Rotate { page, turns: turns.rem_euclid(4) })?
+            push(
+                doc,
+                EditOp::Rotate {
+                    page,
+                    turns: turns.rem_euclid(4),
+                },
+            )?
         }
         "delete_page" => {
             let page = page_arg(doc, args, "index", false)?;
@@ -571,7 +680,13 @@ pub(crate) fn dispatch(
             };
             let text = string_arg(args, "text")?;
             check_text(text, "info_text_bytes", MAX_TEXT_BYTES)?;
-            push(doc, EditOp::SetInfo { key, text: text.to_owned() })?
+            push(
+                doc,
+                EditOp::SetInfo {
+                    key,
+                    text: text.to_owned(),
+                },
+            )?
         }
         "undo" => undo(doc)?,
         "redo" => redo(doc)?,

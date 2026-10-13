@@ -68,8 +68,8 @@ pub(crate) fn source(bytes: &Arc<[u8]>) -> Result<PdfSource, String> {
 }
 
 pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
-    let mut file = File::open(path)
-        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    let mut file =
+        File::open(path).map_err(|error| format!("could not open {}: {error}", path.display()))?;
     let metadata = file
         .metadata()
         .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
@@ -80,8 +80,8 @@ pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
     if length > MAX_SOURCE_BYTES {
         return Err(refusal("source_bytes", length, MAX_SOURCE_BYTES));
     }
-    let length = usize::try_from(length)
-        .map_err(|_| refusal("source_bytes", length, MAX_SOURCE_BYTES))?;
+    let length =
+        usize::try_from(length).map_err(|_| refusal("source_bytes", length, MAX_SOURCE_BYTES))?;
     let mut storage = Vec::new();
     storage
         .try_reserve_exact(length)
@@ -89,8 +89,8 @@ pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
     storage.resize(length, 0);
 
     let mut bytes: Arc<[u8]> = Arc::from(storage);
-    let destination = Arc::get_mut(&mut bytes)
-        .ok_or_else(|| "could not obtain the new PDF buffer".to_owned())?;
+    let destination =
+        Arc::get_mut(&mut bytes).ok_or_else(|| "could not obtain the new PDF buffer".to_owned())?;
     file.read_exact(destination)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let mut extra = [0u8; 1];
@@ -182,13 +182,9 @@ fn open_bytes_with_password(
     let limits = Limits::default();
     // Repair mode tries the strict open first; damaged files (broken xref, object streams or
     // page tree) fall back to the recovering reader instead of being refused.
-    let document = Document::open_with_password_mode(
-        source(&bytes)?,
-        limits,
-        OpenMode::Repair,
-        password,
-    )
-    .map_err(|error| open_error(error, password.is_some()))?;
+    let document =
+        Document::open_with_password_mode(source(&bytes)?, limits, OpenMode::Repair, password)
+            .map_err(|error| open_error(error, password.is_some()))?;
     let encrypted = document.encrypted();
 
     let pages = {
@@ -401,15 +397,14 @@ fn render(doc: &OpenDoc, index: usize, requested: f64) -> Result<Value, String> 
     let page = page(doc, index)?;
     let (width, height) = dimensions(page)?;
     let scale = capped_scale(width, height, requested)?;
-    let options = RenderOptions { scale: scale as f32, fallback_font: Some(fallback_font()) };
+    let options = RenderOptions {
+        scale: scale as f32,
+        fallback_font: Some(fallback_font()),
+    };
     let mut resolver = doc.document.resolver();
-    let raster = pdf_toolkit::raster::render_page(
-        &mut resolver,
-        page,
-        &options,
-        [255, 255, 255, 255],
-    )
-    .map_err(pdf_error)?;
+    let raster =
+        pdf_toolkit::raster::render_page(&mut resolver, page, &options, [255, 255, 255, 255])
+            .map_err(pdf_error)?;
     let png = png_bytes(&raster)?;
     Ok(json!({
         "width": raster.width,
@@ -438,8 +433,7 @@ fn object_arg(args: &Value) -> Result<ObjectRef, String> {
 fn image(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
     require_decryptable(doc)?;
     let mut resolver = doc.document.resolver();
-    let image = load_image(&mut resolver, object_arg(args)?, MAX_PIXELS)
-        .map_err(pdf_error)?;
+    let image = load_image(&mut resolver, object_arg(args)?, MAX_PIXELS).map_err(pdf_error)?;
     let (mime, data) = match image.data {
         ImageData::Jpeg(data) => ("image/jpeg", data),
         ImageData::Pixels { rgba } => {
@@ -685,9 +679,7 @@ fn base64(bytes: &[u8]) -> String {
             c & 63,
         ];
         for (position, index) in indices.into_iter().enumerate() {
-            if (position == 2 && chunk.len() < 2)
-                || (position == 3 && chunk.len() < 3)
-            {
+            if (position == 2 && chunk.len() < 2) || (position == 3 && chunk.len() < 3) {
                 output.push('=');
             } else if let Some(character) = ALPHABET.get(usize::from(index)) {
                 output.push(char::from(*character));
@@ -711,16 +703,16 @@ fn writer_value(
 
     match value.kind() {
         ValueKind::Null => Ok(WriteValue::Null),
-        ValueKind::Bool => Ok(WriteValue::Bool(
-            value
-                .as_bool()
-                .ok_or_else(|| "PDF boolean value is invalid".to_owned())?,
-        )),
-        ValueKind::Int => Ok(WriteValue::Int(
-            value
-                .as_i64()
-                .ok_or_else(|| "PDF integer value is invalid".to_owned())?,
-        )),
+        ValueKind::Bool => {
+            Ok(WriteValue::Bool(value.as_bool().ok_or_else(|| {
+                "PDF boolean value is invalid".to_owned()
+            })?))
+        }
+        ValueKind::Int => {
+            Ok(WriteValue::Int(value.as_i64().ok_or_else(|| {
+                "PDF integer value is invalid".to_owned()
+            })?))
+        }
         ValueKind::Real => {
             let number = value
                 .as_f64()
@@ -792,11 +784,20 @@ fn encrypted_pdf(doc: &OpenDoc, password: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())?;
     let mut references = BTreeMap::new();
     let mut objects = Vec::new();
-    let capacity = usize::try_from(object_count)
-        .map_err(|_| refusal("encrypted_objects", u64::from(object_count), u64::from(MAX_ENCRYPTED_OBJECTS)))?;
-    objects
-        .try_reserve_exact(capacity)
-        .map_err(|_| refusal("encrypted_objects", u64::from(object_count), u64::from(MAX_ENCRYPTED_OBJECTS)))?;
+    let capacity = usize::try_from(object_count).map_err(|_| {
+        refusal(
+            "encrypted_objects",
+            u64::from(object_count),
+            u64::from(MAX_ENCRYPTED_OBJECTS),
+        )
+    })?;
+    objects.try_reserve_exact(capacity).map_err(|_| {
+        refusal(
+            "encrypted_objects",
+            u64::from(object_count),
+            u64::from(MAX_ENCRYPTED_OBJECTS),
+        )
+    })?;
 
     for number in 1..doc.document.xref().size() {
         let source_id = match doc.document.xref().get(number) {
@@ -983,11 +984,7 @@ fn dispatch(
                 MAX_PASSWORD_BYTES as u64,
             ));
         }
-        let reply = open_path_with_password(
-            state,
-            Path::new(path),
-            Some(password.as_bytes()),
-        )?;
+        let reply = open_path_with_password(state, Path::new(path), Some(password.as_bytes()))?;
         if let Err(error) = handle.emit("document_opened", &reply) {
             eprintln!("pdf-viewer: could not announce the opened document: {error}");
         }
@@ -1015,12 +1012,14 @@ fn dispatch(
         return Ok(current
             .as_ref()
             .map(editing::edit_state)
-            .unwrap_or_else(|| json!({
-                "dirty": false,
-                "can_undo": false,
-                "can_redo": false,
-                "path": null
-            })));
+            .unwrap_or_else(|| {
+                json!({
+                    "dirty": false,
+                    "can_undo": false,
+                    "can_redo": false,
+                    "path": null
+                })
+            }));
     }
     let doc = current
         .as_mut()

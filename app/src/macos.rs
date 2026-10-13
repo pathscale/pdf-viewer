@@ -144,24 +144,26 @@ fn schedule_pending_paths() {
         return;
     };
 
-    let _ = nagoya::runtime::background().spawn(async move { loop {
-        let Some(path) = take_latest_path() else {
-            DELIVERY_RUNNING.store(false, Ordering::Release);
-            if has_pending_paths() {
-                schedule_pending_paths();
-            }
-            return;
-        };
-
-        match crate::commands::open_path(&target.state, &path) {
-            Ok(reply) => {
-                if let Err(error) = target.handle.emit("document_opened", &reply) {
-                    eprintln!("pdf-viewer: could not announce the opened document: {error}");
+    let _ = nagoya::runtime::background().spawn(async move {
+        loop {
+            let Some(path) = take_latest_path() else {
+                DELIVERY_RUNNING.store(false, Ordering::Release);
+                if has_pending_paths() {
+                    schedule_pending_paths();
                 }
+                return;
+            };
+
+            match crate::commands::open_path(&target.state, &path) {
+                Ok(reply) => {
+                    if let Err(error) = target.handle.emit("document_opened", &reply) {
+                        eprintln!("pdf-viewer: could not announce the opened document: {error}");
+                    }
+                }
+                Err(error) => eprintln!("pdf-viewer: {error}"),
             }
-            Err(error) => eprintln!("pdf-viewer: {error}"),
         }
-    }});
+    });
 }
 
 fn paths_from_event(event: &AnyObject) -> Vec<PathBuf> {
@@ -278,8 +280,8 @@ fn install_open_document_handler() -> Result<(), String> {
 }
 
 fn app_bundle_path() -> Result<PathBuf, String> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| "the home directory is unavailable".to_owned())?;
+    let home =
+        std::env::var_os("HOME").ok_or_else(|| "the home directory is unavailable".to_owned())?;
     Ok(PathBuf::from(home)
         .join("Applications")
         .join("PDF Viewer.app"))
@@ -381,7 +383,10 @@ pub(crate) fn install_app() -> Result<(), String> {
     let staging_path = applications.join(".PDF Viewer.app.installing");
     remove_bundle(&staging_path)?;
 
-    let staging_executable = staging_path.join("Contents").join("MacOS").join("pdf-viewer");
+    let staging_executable = staging_path
+        .join("Contents")
+        .join("MacOS")
+        .join("pdf-viewer");
     let staging_contents = staging_path.join("Contents");
     let install_result = (|| {
         fs::create_dir_all(staging_executable.parent().unwrap())
@@ -412,7 +417,9 @@ pub(crate) fn install_app() -> Result<(), String> {
 
     match set_default_pdf_handler() {
         Ok(0) => println!("PDF files now open in PDF Viewer"),
-        Ok(status) => eprintln!("pdf-viewer: could not set the PDF default handler, OSStatus {status}"),
+        Ok(status) => {
+            eprintln!("pdf-viewer: could not set the PDF default handler, OSStatus {status}")
+        }
         Err(error) => eprintln!("pdf-viewer: could not set the PDF default handler: {error}"),
     }
     Ok(())
@@ -468,11 +475,9 @@ fn set_default_pdf_handler() -> Result<i32, String> {
     };
 
     // SAFETY: Both arguments are valid CFStrings and the role mask requests all roles.
-    let status = unsafe {
-        LSSetDefaultRoleHandlerForContentType(content_type, u32::MAX, bundle_identifier)
-    };
+    let status =
+        unsafe { LSSetDefaultRoleHandlerForContentType(content_type, u32::MAX, bundle_identifier) };
     release_cf_string(bundle_identifier);
     release_cf_string(content_type);
     Ok(status)
 }
-

@@ -144,9 +144,9 @@ fn main() {
     {
         (|| {
             let mut args = std::env::args_os().skip(2);
-            let path = args.next().ok_or_else(|| {
-                "usage: pdf-viewer --bench-first-page <file.pdf>".to_owned()
-            })?;
+            let path = args
+                .next()
+                .ok_or_else(|| "usage: pdf-viewer --bench-first-page <file.pdf>".to_owned())?;
             if args.next().is_some() {
                 return Err("usage: pdf-viewer --bench-first-page <file.pdf>".to_owned());
             }
@@ -163,4 +163,3 @@ fn main() {
         std::process::exit(1);
     }
 }
-

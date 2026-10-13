@@ -65,12 +65,16 @@ fn compress(path: &Path, bytes: &[u8], quality: u32) -> io::Result<()> {
 fn embed() -> io::Result<()> {
     let manifest = std::env::var_os("CARGO_MANIFEST_DIR")
         .ok_or_else(|| io::Error::other("CARGO_MANIFEST_DIR is missing"))?;
-    let output = std::env::var_os("OUT_DIR")
-        .ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
+    let output =
+        std::env::var_os("OUT_DIR").ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
     // The repo builds from frontend/dist; the published crate carries the same bundle in ui/.
     let manifest = PathBuf::from(manifest);
     let repo_dist = manifest.join("../frontend/dist");
-    let dist = if repo_dist.join("index.html").is_file() { repo_dist } else { manifest.join("ui") };
+    let dist = if repo_dist.join("index.html").is_file() {
+        repo_dist
+    } else {
+        manifest.join("ui")
+    };
     let output = PathBuf::from(output);
 
     println!("cargo:rerun-if-changed=../frontend");
@@ -108,13 +112,15 @@ fn embed() -> io::Result<()> {
 }
 
 fn be16(bytes: &[u8], at: usize) -> io::Result<u16> {
-    bytes.get(at..at + 2)
+    bytes
+        .get(at..at + 2)
         .map(|b| u16::from_be_bytes([b[0], b[1]]))
         .ok_or_else(|| io::Error::other("WOFF truncated"))
 }
 
 fn be32(bytes: &[u8], at: usize) -> io::Result<u32> {
-    bytes.get(at..at + 4)
+    bytes
+        .get(at..at + 4)
         .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
         .ok_or_else(|| io::Error::other("WOFF truncated"))
 }
@@ -135,7 +141,8 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
         let compressed = be32(woff, entry + 8)? as usize;
         let original = be32(woff, entry + 12)? as usize;
         let checksum = be32(woff, entry + 16)?;
-        let stored = woff.get(offset..offset + compressed)
+        let stored = woff
+            .get(offset..offset + compressed)
             .ok_or_else(|| io::Error::other("WOFF table out of range"))?;
         let data = if compressed == original {
             stored.to_vec()
@@ -177,11 +184,14 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
 
 /// Glyph shapes for unembedded standard fonts (advances still come from the PDF widths).
 fn fallback_font() -> io::Result<()> {
-    let output = std::env::var_os("OUT_DIR")
-        .ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
+    let output =
+        std::env::var_os("OUT_DIR").ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
     let source = Path::new("assets/inter-latin-400-normal.woff");
     println!("cargo:rerun-if-changed={}", source.display());
-    fs::write(PathBuf::from(output).join("fallback.ttf"), woff_to_sfnt(&fs::read(source)?)?)
+    fs::write(
+        PathBuf::from(output).join("fallback.ttf"),
+        woff_to_sfnt(&fs::read(source)?)?,
+    )
 }
 
 fn main() {
@@ -192,4 +202,3 @@ fn main() {
         panic!("could not prepare the fallback font: {error}");
     }
 }
-
