@@ -110,7 +110,9 @@ static ALLOC: rusty_alloc::RustyAlloc = rusty_alloc::RustyAlloc;
 mod app_caps;
 
 fn main() {
-    let _caps = app_caps::start([2147483648, 3600, 43200, 512, 2, 64, 268435456, 10000, 10000]);
+    let _caps = app_caps::start([
+        2147483648, 3600, 43200, 512, 2, 64, 268435456, 10000, 10000, 16000000,
+    ]);
     app_caps::stage("app/src/main.rs: running");
     let first_argument = app_caps::args_os().nth(1);
 

@@ -16,7 +16,6 @@ use pdf_toolkit::text::semantic::{LinkTarget, SemanticKind, SemanticPage, Semant
 use serde_json::{Value, json};
 
 pub(crate) const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_PIXELS: u64 = 16_000_000;
 const MAX_SEARCH_HITS: u64 = 10_000;
 const MAX_QUERY_BYTES: usize = 4096;
 const MAX_SEARCH_TEXT_BYTES: usize = 4 * 1024 * 1024;
@@ -214,7 +213,8 @@ pub(crate) fn bench_first_page(path: &Path) -> Result<Value, String> {
         .as_f64()
         .ok_or_else(|| "the page has invalid display dimensions".to_owned())?;
     // Default page view: zoom, font scale and device scale are all one.
-    let scale = (96.0_f64 / 72.0).min((MAX_PIXELS as f64 / (width * height)).sqrt());
+    let scale =
+        (96.0_f64 / 72.0).min((crate::app_caps::hard("pixels") as f64 / (width * height)).sqrt());
     render(doc, 0, scale)?;
     let first_page_ms = started.elapsed().as_secs_f64() * 1000.0;
     // Match Page.tsx: the text layer loads after the first paint.
@@ -450,7 +450,7 @@ fn capped_scale(width: f64, height: f64, requested: f64) -> Result<f32, String> 
         return Err("the page dimensions cannot be rasterized".to_owned());
     }
     let area = f64::from(width) * f64::from(height);
-    let maximum = MAX_PIXELS as f64;
+    let maximum = crate::app_caps::hard("pixels") as f64;
     let bound = (maximum / area)
         .sqrt()
         .min(maximum / f64::from(width))
@@ -465,26 +465,42 @@ fn capped_scale(width: f64, height: f64, requested: f64) -> Result<f32, String> 
         let pixels_high = (height * scale).ceil().max(1.0) as u64;
         if pixels_wide
             .checked_mul(pixels_high)
-            .is_some_and(|pixels| pixels <= MAX_PIXELS)
+            .is_some_and(|pixels| pixels <= crate::app_caps::hard("pixels"))
         {
+            crate::app_caps::check("pixels", pixels_wide.saturating_mul(pixels_high));
             return Ok(scale);
         }
         scale *= 0.99;
     }
-    Err(refusal("raster_pixels", u64::MAX, MAX_PIXELS))
+    Err(refusal(
+        "raster_pixels",
+        u64::MAX,
+        crate::app_caps::hard("pixels"),
+    ))
 }
 
 fn png_bytes(raster: &Raster) -> Result<Vec<u8>, String> {
     let pixels = u64::from(raster.width)
         .checked_mul(u64::from(raster.height))
-        .ok_or_else(|| refusal("raster_pixels", u64::MAX, MAX_PIXELS))?;
-    if pixels == 0 || pixels > MAX_PIXELS {
-        return Err(refusal("raster_pixels", pixels, MAX_PIXELS));
+        .ok_or_else(|| refusal("raster_pixels", u64::MAX, crate::app_caps::hard("pixels")))?;
+    crate::app_caps::check("pixels", pixels);
+    if pixels == 0 || pixels > crate::app_caps::hard("pixels") {
+        return Err(refusal(
+            "raster_pixels",
+            pixels,
+            crate::app_caps::hard("pixels"),
+        ));
     }
     let expected = pixels
         .checked_mul(4)
         .and_then(|length| usize::try_from(length).ok())
-        .ok_or_else(|| refusal("raster_bytes", u64::MAX, MAX_PIXELS * 4))?;
+        .ok_or_else(|| {
+            refusal(
+                "raster_bytes",
+                u64::MAX,
+                crate::app_caps::hard("pixels") * 4,
+            )
+        })?;
     if raster.rgba.len() != expected {
         return Err("the raster buffer has an invalid length".to_owned());
     }
@@ -548,7 +564,12 @@ fn object_arg(args: &Value) -> Result<ObjectRef, String> {
 fn image(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
     require_decryptable(doc)?;
     let mut resolver = doc.document.resolver();
-    let image = load_image(&mut resolver, object_arg(args)?, MAX_PIXELS).map_err(pdf_error)?;
+    let image = load_image(
+        &mut resolver,
+        object_arg(args)?,
+        crate::app_caps::hard("pixels"),
+    )
+    .map_err(pdf_error)?;
     let (mime, data) = match image.data {
         ImageData::Jpeg(data) => ("image/jpeg", data),
         ImageData::Pixels { rgba } => {
@@ -792,7 +813,9 @@ fn search(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
             .and_then(Option::as_ref)
             .ok_or_else(|| format!("page index {index} is out of range"))?;
         let mut resolver = doc.document.resolver();
+        crate::app_caps::check("cache-entries", doc.font_cache.len() as u64);
         let receipt = page_receipt_cached(&mut resolver, descriptor, &mut doc.font_cache);
+        crate::app_caps::check("cache-entries", doc.font_cache.len() as u64);
         if let Some(error) = receipt.refusal {
             match error {
                 error @ (pdf_toolkit::core::DocError::Refused(_)
@@ -1133,6 +1156,9 @@ fn dispatch(
     args: Value,
 ) -> Result<Value, String> {
     crate::app_caps::stage(Arc::<str>::from(format!("PDF command {command}")));
+    crate::app_caps::turn(std::sync::Arc::<str>::from(format!(
+        "PDF command: {command}"
+    )));
     if !args.is_object() {
         return Err("command arguments must be an object".to_owned());
     }
