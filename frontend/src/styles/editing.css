@@ -131,8 +131,7 @@ textarea:focus-visible,
 }
 
 .annotation-composer label,
-.insert-pdf label,
-.properties-dialog label {
+.insert-pdf label {
   display: flex;
   flex-direction: column;
   gap: var(--viewer-space-xs);
@@ -242,7 +241,9 @@ textarea:focus-visible,
 }
 
 .properties-dialog {
+  flex: none;
   width: 32rem;
+  min-width: 0;
   max-width: 100%;
   max-height: 90vh;
   overflow: auto;
@@ -252,64 +253,97 @@ textarea:focus-visible,
   background: var(--viewer-surface);
   color: var(--viewer-text);
   box-shadow: var(--viewer-shadow-size) var(--viewer-shadow-color);
+  font-family: var(--viewer-font);
+  font-size: var(--viewer-control-text);
+  line-height: calc(var(--viewer-control-text) * var(--viewer-leading));
 }
 
 .properties-dialog h2 {
   margin: 0 0 var(--viewer-space-lg);
-  font-size: var(--viewer-heading-two);
+  font-size: 1.25rem;
   font-weight: var(--viewer-font-strong);
+  line-height: calc(1.25rem * var(--viewer-leading-heading));
 }
 
+/* Keep modal text in block flow so Blitz does not size it as flex content. */
 .properties-dialog form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--viewer-space-md);
-}
-
-.encrypted-save-dialog form > label {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--viewer-space-sm);
-  width: 100%;
-}
-
-.encrypted-save-field .viewer-input {
+  display: block;
   width: 100%;
   min-width: 0;
 }
 
-.encrypted-save-dialog .encrypted-save-warning,
-.encrypted-save-dialog .encrypted-save-error {
+.properties-dialog form > * + * {
+  margin-block-start: var(--viewer-space-md);
+}
+
+.properties-dialog form > label {
   display: block;
+  width: 100%;
+  min-width: 0;
+  font-size: var(--viewer-control-text);
+  line-height: calc(var(--viewer-control-text) * var(--viewer-leading));
+}
+
+.properties-dialog form > label > span {
+  display: block;
+  margin-block-end: var(--viewer-space-xs);
+  font-size: var(--viewer-control-text);
+  line-height: calc(var(--viewer-control-text) * var(--viewer-leading));
+}
+
+.properties-dialog .viewer-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
-  margin: 0;
+  font-family: var(--viewer-font);
+  font-size: var(--viewer-control-text);
+  line-height: calc(var(--viewer-control-text) * var(--viewer-leading));
+}
+
+.properties-dialog .error-banner {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: var(--viewer-space-md) 0 0;
+  font-size: var(--viewer-control-text);
+  line-height: calc(var(--viewer-control-text) * var(--viewer-leading));
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.encrypted-save-dialog .encrypted-save-confirmation {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--viewer-space-sm);
+.properties-dialog .encrypted-save-confirmation input[type="checkbox"] {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  margin: 0 var(--viewer-space-sm) 0 0;
+  vertical-align: middle;
 }
 
-.encrypted-save-confirmation input[type="checkbox"] {
-  flex: none;
+.properties-dialog form > .encrypted-save-confirmation > span {
+  display: inline;
+  margin: 0;
+  vertical-align: middle;
 }
 
-.encrypted-save-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--viewer-space-sm);
+.properties-dialog .editing-tools {
+  display: block;
 }
 
-.encrypted-save-actions > .viewer-button {
-  flex: none;
-  width: max-content;
-  white-space: nowrap;
+.properties-dialog .viewer-button {
+  display: inline-block;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  margin: 0 var(--viewer-space-sm) var(--viewer-space-sm) 0;
+  font-family: var(--viewer-font);
+  font-size: var(--viewer-control-text);
+  line-height: calc(var(--viewer-control-text) * var(--viewer-leading));
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .editing-save-status {

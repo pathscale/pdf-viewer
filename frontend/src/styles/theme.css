@@ -46,6 +46,7 @@
   --viewer-small-text: 0.75rem;
   --viewer-control-text: 0.875rem;
   --viewer-reading-text: 1rem;
+  /* Reading-view headings: em on purpose, so they scale with the reading zoom. */
   --viewer-heading-one: 1.875em;
   --viewer-heading-two: 1.375em;
   --viewer-heading-three: 1.125em;

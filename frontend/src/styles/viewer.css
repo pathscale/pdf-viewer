@@ -662,7 +662,8 @@ a {
 }
 
 .empty-state h1 {
-  font-size: var(--viewer-heading-one);
+  /* Interface text is rem; only reading-view content uses em so it follows the zoom. */
+  font-size: 1.875rem;
   font-weight: var(--viewer-font-heading);
 }
 
