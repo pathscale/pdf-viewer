@@ -1,3 +1,6 @@
+#[path = "build_caps.rs"]
+mod caps;
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -42,7 +45,7 @@ h1 {
 "#;
 
 fn asset(path: &Path, fallback: &[u8]) -> io::Result<Vec<u8>> {
-    match fs::read(path) {
+    match caps::bytes(path) {
         Ok(bytes) => {
             std::str::from_utf8(&bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -135,6 +138,7 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
     let count = usize::from(be16(woff, 12)?);
     let mut tables = Vec::with_capacity(count);
     for index in 0..count {
+        caps::turn("asset build: WOFF table");
         let entry = 44 + index * 20;
         let tag = be32(woff, entry)?;
         let offset = be32(woff, entry + 4)? as usize;
@@ -190,11 +194,25 @@ fn fallback_font() -> io::Result<()> {
     println!("cargo:rerun-if-changed={}", source.display());
     fs::write(
         PathBuf::from(output).join("fallback.ttf"),
-        woff_to_sfnt(&fs::read(source)?)?,
+        woff_to_sfnt(&caps::bytes(source)?)?,
     )
 }
 
 fn main() {
+    caps::start(
+        "pdf-viewer-asset-build",
+        &[
+            ("rss", 1073741824),
+            ("cpu-secs", 120),
+            ("wall-secs", 300),
+            ("open-files", 256),
+            ("threads", 32),
+            ("procs", 2),
+            ("input-bytes", 67108864),
+            ("iterations", 10000),
+        ],
+    );
+    caps::stage("pdf-viewer-asset-build: dispatch");
     if let Err(error) = embed() {
         panic!("could not embed the PDF Viewer frontend: {error}");
     }

@@ -38,6 +38,7 @@ objc2-app-kit = "^0.3"
 block2 = "^0.6"
 
 [build-dependencies]
+libc = "^0.2.189"
+nagoya = { version = "^0.1.12", features = ["reactor"] }
 brotli.workspace = true
 miniz_oxide = "^0.8"
-
