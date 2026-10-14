@@ -5,15 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::editing::{self, History};
-use pdf_toolkit::core::pages::{Page, PageWalk};
+use pdf_toolkit::core::pages::{Page, PageWalk, page_count_hint_strict};
 use pdf_toolkit::core::{Document, Limits, ObjectRef, OpenMode, PdfSource, XrefEntry};
-use pdf_toolkit::raster::{encode_png, Raster};
+use pdf_toolkit::raster::{Raster, encode_png};
 use pdf_toolkit::render::RenderOptions;
 use pdf_toolkit::text::extract::page_receipt_cached;
 use pdf_toolkit::text::font::FontCache;
-use pdf_toolkit::text::images::{load_image, ImageData};
+use pdf_toolkit::text::images::{ImageData, load_image};
 use pdf_toolkit::text::semantic::{LinkTarget, SemanticKind, SemanticPage, SemanticReader};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(crate) const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16_000_000;
@@ -30,7 +30,7 @@ pub type State = Arc<Mutex<Option<OpenDoc>>>;
 pub struct OpenDoc {
     pub(crate) bytes: Arc<[u8]>,
     pub(crate) document: Document,
-    pub(crate) pages: Vec<Page>,
+    pub(crate) pages: Vec<Option<Page>>,
     font_cache: FontCache,
     pub(crate) semantic: Option<SemanticReader>,
     semantic_next: usize,
@@ -65,6 +65,45 @@ fn open_error(error: pdf_toolkit::core::DocError, password_supplied: bool) -> St
 /// A source over the shared bytes; fails only when there is no PDF header.
 pub(crate) fn source(bytes: &Arc<[u8]>) -> Result<PdfSource, String> {
     PdfSource::new(Arc::clone(bytes)).map_err(|error| error.to_string())
+}
+fn info_strings(document: &Document) -> [Option<String>; 4] {
+    let Some(info_ref) = document.info_ref() else {
+        return [None, None, None, None];
+    };
+    let mut resolver = document.resolver();
+    let Ok(object) = resolver.get(info_ref) else {
+        return [None, None, None, None];
+    };
+    let Some(dictionary) = object.root().as_dict() else {
+        return [None, None, None, None];
+    };
+
+    let mut title = None;
+    let mut author = None;
+    let mut subject = None;
+    let mut keywords = None;
+    for (key, value) in dictionary.iter() {
+        let key = key.decoded();
+        match key.as_ref() {
+            b"Title" => title = value.as_str().map(|string| string.decode()),
+            b"Author" => author = value.as_str().map(|string| string.decode()),
+            b"Subject" => subject = value.as_str().map(|string| string.decode()),
+            b"Keywords" => keywords = value.as_str().map(|string| string.decode()),
+            _ => {}
+        }
+    }
+    [title, author, subject, keywords]
+}
+
+fn document_info(doc: &OpenDoc) -> Result<Value, String> {
+    require_unencrypted(doc)?;
+    let [title, author, subject, keywords] = info_strings(&doc.document);
+    Ok(json!({
+        "title": title,
+        "author": author,
+        "subject": subject,
+        "keywords": keywords
+    }))
 }
 
 pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
@@ -114,11 +153,11 @@ pub(crate) fn bench_first_page(path: &Path) -> Result<Value, String> {
     open_path(&state, path)?;
     let open_ms = started.elapsed().as_secs_f64() * 1000.0;
 
-    let current = state
+    let mut current = state
         .lock()
         .map_err(|_| "the document state is unavailable".to_owned())?;
     let doc = current
-        .as_ref()
+        .as_mut()
         .ok_or_else(|| "open a PDF first".to_owned())?;
     let pages = doc.pages.len();
     if pages == 0 {
@@ -189,12 +228,39 @@ fn open_bytes_with_password(
 
     let pages = {
         let mut resolver = document.resolver();
+        let hint = match page_count_hint_strict(&mut resolver) {
+            Ok(count) => count,
+            Err(pdf_toolkit::core::DocError::Encrypted) if encrypted => 0,
+            Err(
+                error @ (pdf_toolkit::core::DocError::Refused(_)
+                | pdf_toolkit::core::DocError::Encrypted
+                | pdf_toolkit::core::DocError::Source(_)),
+            ) => return Err(pdf_error(error)),
+            Err(_) => 0,
+        };
+        if hint > limits.max_pages {
+            return Err(refusal(
+                "pages",
+                u64::from(hint),
+                u64::from(limits.max_pages),
+            ));
+        }
+        let count =
+            usize::try_from(hint).map_err(|_| "the page count is out of range".to_owned())?;
         let mut pages = Vec::new();
+        pages
+            .try_reserve_exact(count)
+            .map_err(|_| "could not allocate the page cache".to_owned())?;
+        pages.resize_with(count, || None);
         match PageWalk::new(&mut resolver) {
             Ok(walk) => {
-                for page in walk {
-                    match page {
-                        Ok(page) => pages.push(page),
+                for result in walk {
+                    match result {
+                        Ok(page) if count == 0 => pages.push(Some(page)),
+                        Ok(page) => {
+                            pages[0] = Some(page);
+                            break;
+                        }
                         Err(pdf_toolkit::core::DocError::Encrypted) if encrypted => break,
                         Err(error) => return Err(pdf_error(error)),
                     }
@@ -206,43 +272,13 @@ fn open_bytes_with_password(
         pages
     };
 
-    let mut semantic = if encrypted {
-        None
-    } else {
-        Some(
-            SemanticReader::open_with(source(&bytes)?, limits, OpenMode::Repair)
-                .map_err(pdf_error)?,
-        )
-    };
-    let title = semantic
-        .as_ref()
-        .and_then(|reader| reader.info().title.clone());
-    let outline: Vec<Value> = semantic
-        .as_mut()
-        .map(|reader| {
-            reader
-                .outline()
-                .into_iter()
-                .map(|item| {
-                    let page = match item.target {
-                        Some(LinkTarget::Page { index, .. }) => Some(index),
-                        _ => None,
-                    };
-                    json!({
-                        "title": item.title,
-                        "level": item.level,
-                        "page": page
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let [title, _, _, _] = info_strings(&document);
 
     let summary = json!({
         "title": title,
         "pages": pages.len(),
         "encrypted": encrypted,
-        "outline": outline
+        "outline": []
     });
     Ok(OpenDoc {
         history: History::new(Arc::clone(&bytes), path),
@@ -250,7 +286,7 @@ fn open_bytes_with_password(
         document,
         pages,
         font_cache: FontCache::default(),
-        semantic,
+        semantic: None,
         semantic_next: 0,
         summary,
     })
@@ -270,9 +306,31 @@ fn index_arg(args: &Value) -> Result<usize, String> {
     usize::try_from(index).map_err(|_| "index is out of range".to_owned())
 }
 
+pub(crate) fn ensure_page(doc: &mut OpenDoc, index: usize) -> Result<(), String> {
+    let Some(cached) = doc.pages.get(index) else {
+        return Err(format!("page index {index} is out of range"));
+    };
+    if cached.is_some() {
+        return Ok(());
+    }
+
+    let mut resolver = doc.document.resolver();
+    let walk = PageWalk::new(&mut resolver).map_err(pdf_error)?;
+    for (position, result) in walk.enumerate().take(index.saturating_add(1)) {
+        let descriptor = result.map_err(pdf_error)?;
+        if let Some(slot) = doc.pages.get_mut(position)
+            && slot.is_none()
+        {
+            *slot = Some(descriptor);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn page(doc: &OpenDoc, index: usize) -> Result<&Page, String> {
     doc.pages
         .get(index)
+        .and_then(Option::as_ref)
         .ok_or_else(|| format!("page index {index} is out of range"))
 }
 
@@ -290,7 +348,8 @@ fn dimensions(page: &Page) -> Result<(f64, f64), String> {
     }
 }
 
-fn page_size(doc: &OpenDoc, index: usize) -> Result<Value, String> {
+fn page_size(doc: &mut OpenDoc, index: usize) -> Result<Value, String> {
+    ensure_page(doc, index)?;
     let descriptor = page(doc, index)?;
     let (width, height) = dimensions(descriptor)?;
     let rotate = descriptor.rotate.rem_euclid(360);
@@ -392,9 +451,14 @@ fn fallback_font() -> Arc<[u8]> {
         .clone()
 }
 
-fn render(doc: &OpenDoc, index: usize, requested: f64) -> Result<Value, String> {
+fn render(doc: &mut OpenDoc, index: usize, requested: f64) -> Result<Value, String> {
     require_decryptable(doc)?;
-    let page = page(doc, index)?;
+    ensure_page(doc, index)?;
+    let page = doc
+        .pages
+        .get(index)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| format!("page index {index} is out of range"))?;
     let (width, height) = dimensions(page)?;
     let scale = capped_scale(width, height, requested)?;
     let options = RenderOptions {
@@ -450,9 +514,47 @@ fn image(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
     };
     Ok(json!({ "mime": mime, "data": base64(&data) }))
 }
+fn outline(doc: &mut OpenDoc) -> Result<Value, String> {
+    if doc.document.encrypted() {
+        return Ok(json!([]));
+    }
+    if let Some(last) = doc.pages.len().checked_sub(1) {
+        ensure_page(doc, last)?;
+    }
+
+    let mut pages = Vec::new();
+    pages
+        .try_reserve_exact(doc.pages.len())
+        .map_err(|_| "could not allocate the page cache".to_owned())?;
+    for cached in &doc.pages {
+        let cached = cached
+            .as_ref()
+            .ok_or_else(|| "the page cache is incomplete".to_owned())?;
+        pages.push(cached.clone());
+    }
+
+    let mut resolver = doc.document.resolver();
+    let items = pdf_toolkit::text::links::outline_with_pages(&mut resolver, &pages);
+    let outline: Vec<Value> = items
+        .into_iter()
+        .map(|item| {
+            let page = match item.target {
+                Some(LinkTarget::Page { index, .. }) => Some(index),
+                _ => None,
+            };
+            json!({
+                "title": item.title,
+                "level": item.level,
+                "page": page
+            })
+        })
+        .collect();
+    Ok(Value::Array(outline))
+}
 
 fn semantic_at(doc: &mut OpenDoc, index: usize) -> Result<SemanticPage, String> {
     require_unencrypted(doc)?;
+    ensure_page(doc, index)?;
     page(doc, index)?;
 
     if doc.semantic.is_none() || index < doc.semantic_next {
@@ -612,9 +714,11 @@ fn search(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
     for index in 0..doc.pages.len() {
         // Borrow the fields separately: the page and the resolver are shared,
         // the font cache is the one mutable piece.
+        ensure_page(doc, index)?;
         let descriptor = doc
             .pages
             .get(index)
+            .and_then(Option::as_ref)
             .ok_or_else(|| format!("page index {index} is out of range"))?;
         let mut resolver = doc.document.resolver();
         let receipt = page_receipt_cached(&mut resolver, descriptor, &mut doc.font_cache);
@@ -1028,6 +1132,9 @@ fn dispatch(
     if command == "save_encrypted_copy" {
         return save_encrypted_copy(doc, &args);
     }
+    if command == "info" {
+        return document_info(doc);
+    }
 
     if editing::handles(command) {
         let (reply, changed) = editing::dispatch(doc, command, &args)?;
@@ -1040,6 +1147,7 @@ fn dispatch(
     }
 
     match command {
+        "outline" => outline(doc),
         "page_size" => page_size(doc, index_arg(&args)?),
         "render_page" => {
             let scale = args
@@ -1050,6 +1158,7 @@ fn dispatch(
         }
         "thumbnail" => {
             let index = index_arg(&args)?;
+            ensure_page(doc, index)?;
             let (width, _) = dimensions(page(doc, index)?)?;
             render(doc, index, THUMBNAIL_WIDTH / width)
         }
@@ -1071,6 +1180,7 @@ pub fn table(state: State, handle: izumo::AppHandle) -> Vec<(&'static str, izumo
         "page_size",
         "render_page",
         "semantic_page",
+        "outline",
         "page_image",
         "search",
         "thumbnail",

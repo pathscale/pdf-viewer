@@ -1,16 +1,21 @@
 use std::sync::Arc;
 
 use pdf_toolkit::text::{layout, page_text};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::commands::{self, OpenDoc, State};
 
 const MAX_LINES: usize = 4096;
 const MAX_GLYPHS: usize = 65_536;
 
-pub(crate) fn extract(doc: &OpenDoc, index: usize) -> Result<Value, String> {
+pub(crate) fn extract(doc: &mut OpenDoc, index: usize) -> Result<Value, String> {
     commands::require_unencrypted(doc)?;
-    let page = commands::page(doc, index)?;
+    commands::ensure_page(doc, index)?;
+    let page = doc
+        .pages
+        .get(index)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| format!("page index {index} is out of range"))?;
     let mut resolver = doc.document.resolver();
     let text = page_text(&mut resolver, page).map_err(|error| format!("{error:?}"))?;
     if text.glyphs.len() > MAX_GLYPHS {
@@ -84,11 +89,11 @@ pub(crate) fn handler(state: State) -> izumo::CommandHandler {
             .and_then(Value::as_u64)
             .ok_or_else(|| "page_index must be a nonnegative integer".to_owned())?;
         let index = usize::try_from(index).map_err(|_| "page_index is out of range".to_owned())?;
-        let current = state
+        let mut current = state
             .lock()
             .map_err(|_| "the document state is unavailable".to_owned())?;
         let doc = current
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| "open a PDF first".to_owned())?;
         extract(doc, index)
     })

@@ -15,6 +15,7 @@ interface PageProps {
   hit: () => SearchHit | null;
   subscribe: (handler: () => void) => () => void;
   onSize: (index: number, size: PageSize) => void;
+  onReady: () => void;
   navigate: (index: number) => void;
   editor: Editor;
 }
@@ -111,7 +112,10 @@ export function Page(props: PageProps) {
 
         if (preferences.view === "reading") {
           const page = await schedule(() => api.semanticPage(props.index), valid);
-          if (valid()) setSemantic(page);
+          if (valid()) {
+            setSemantic(page);
+            props.onReady();
+          }
         } else {
           // Paint first; the text layer for selection follows.
           const dimensions = size();
@@ -123,6 +127,7 @@ export function Page(props: PageProps) {
           const image = await schedule(() => api.renderPage(props.index, scale), valid);
           if (!valid()) return;
           setRaster(image);
+          props.onReady();
           if (textLines() === null) {
             // A page whose text layer fails still renders; it just has nothing to select.
             const lines = await schedule(() => api.textLines(props.index), valid).catch(() => []);

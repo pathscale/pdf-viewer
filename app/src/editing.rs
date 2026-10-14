@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use pdf_toolkit::core::Limits;
 use pdf_toolkit::edit::Editor;
-use pdf_toolkit::text::annots::{page_annotations, Annotation};
+use pdf_toolkit::text::annots::{Annotation, page_annotations};
 use pdf_toolkit::write::annot::{Annot, AnnotKind};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::commands::{self, OpenDoc};
 
@@ -355,15 +355,16 @@ fn annotation_arg(args: &Value) -> Result<Annot, String> {
     })
 }
 
-fn annotations_at(doc: &OpenDoc, index: usize) -> Result<Vec<Annotation>, String> {
+fn annotations_at(doc: &mut OpenDoc, index: usize) -> Result<Vec<Annotation>, String> {
     commands::require_unencrypted(doc)?;
+    commands::ensure_page(doc, index)?;
     let page = commands::page(doc, index)?;
     let mut resolver = doc.document.resolver();
     let object = resolver.get(page.id).map_err(commands::pdf_error)?;
     Ok(page_annotations(&mut resolver, &object))
 }
 
-fn annotations_json(doc: &OpenDoc, index: usize) -> Result<Value, String> {
+fn annotations_json(doc: &mut OpenDoc, index: usize) -> Result<Value, String> {
     let annotations = annotations_at(doc, index)?
         .into_iter()
         .map(|annot| {
@@ -455,10 +456,10 @@ fn prepare_push(doc: &mut OpenDoc, op: &EditOp) -> Result<(), String> {
 
 fn push(doc: &mut OpenDoc, op: EditOp) -> Result<Value, String> {
     prepare_push(doc, &op)?;
-    let rebuilt = rebuild(doc, doc.history.ops.iter().chain(std::iter::once(&op)))?;
+    let mut rebuilt = rebuild(doc, doc.history.ops.iter().chain(std::iter::once(&op)))?;
     let reply = match &op {
         EditOp::Annotate { page, .. } => {
-            let annotations = annotations_at(&rebuilt, *page as usize)?;
+            let annotations = annotations_at(&mut rebuilt, *page as usize)?;
             let annotation = annotations
                 .last()
                 .ok_or_else(|| "the added annotation could not be read back".to_owned())?;

@@ -3,6 +3,7 @@ import type {
   DocumentInfo,
   DocumentProperties,
   EditState,
+  OutlineItem,
   PageImage,
   PageRaster,
   PageSize,
@@ -40,6 +41,7 @@ export function createIzumoApi(): ViewerApi {
     openFileWithPassword: (path, password) =>
       izumo.invoke<DocumentInfo>("open_file_with_password", { path, password }),
     pickAndOpen: () => izumo.invoke<DocumentInfo>("pick_and_open", {}),
+    outline: () => izumo.invoke<OutlineItem[]>("outline", {}),
     pageSize: (index) => izumo.invoke<PageSize>("page_size", { index }),
     renderPage: (index, scale) => izumo.invoke<PageRaster>("render_page", { index, scale }),
     semanticPage: (index) => izumo.invoke<SemanticPage>("semantic_page", { index }),

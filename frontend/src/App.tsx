@@ -80,6 +80,7 @@ export function App() {
   let pathInput!: HTMLInputElement;
   let disposed = false;
   let documentRevision = 0;
+  let outlineRevision = -1;
   let searchRevision = 0;
   let searchTimer: number | undefined;
   let scrollTimer: number | undefined;
@@ -204,6 +205,22 @@ export function App() {
         });
     }, 250);
   }
+  function loadOutline(): void {
+    const revision = documentRevision;
+    if (outlineRevision === revision) return;
+    outlineRevision = revision;
+    const valid = () => !disposed && revision === documentRevision;
+    void schedule(() => api.outline(), valid)
+      .then((outline) => {
+        if (!valid()) return;
+        setInfo((previous) => (previous ? { ...previous, outline } : previous));
+      })
+      .catch(() => {
+        if (!valid()) return;
+        setInfo((previous) => (previous ? { ...previous, outline: [] } : previous));
+      });
+  }
+
 
   function adoptDocument(documentInfo: DocumentInfo): void {
     if (
@@ -845,6 +862,7 @@ export function App() {
                     hit={hit}
                     subscribe={subscribe}
                     onSize={onSize}
+                    onReady={loadOutline}
                     navigate={jump}
                     editor={editor}
                   />

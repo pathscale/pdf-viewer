@@ -159,6 +159,7 @@ export interface ViewerApi {
   openFile(path: string): Promise<DocumentInfo>;
   openFileWithPassword?(path: string, password: string): Promise<DocumentInfo>;
   pickAndOpen(): Promise<DocumentInfo>;
+  outline(): Promise<OutlineItem[]>;
   pageSize(index: number): Promise<PageSize>;
   renderPage(index: number, scale: number): Promise<PageRaster>;
   semanticPage(index: number): Promise<SemanticPage>;

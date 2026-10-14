@@ -343,6 +343,13 @@ export function createMockApi(): ViewerApi {
     async pickAndOpen() {
       return open("A small PDF");
     },
+    async outline() {
+      if (!opened) throw new Error("Open a document first");
+      return [
+        { title: "A small PDF", level: 0, page: 0 },
+        { title: "Reading comfortably", level: 1, page: 1 },
+      ];
+    },
     async pageSize(index) {
       return displaySize(index);
     },
