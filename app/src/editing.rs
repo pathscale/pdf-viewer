@@ -2,6 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pdf_toolkit::core::Limits;
 use pdf_toolkit::edit::Editor;
@@ -18,6 +19,8 @@ const MAX_PATH_BYTES: usize = 4096;
 const MAX_QUADS: usize = 4096;
 const MAX_INK_PATHS: usize = 4096;
 const MAX_INK_POINTS: usize = 65_536;
+
+static TEMPORARY_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct History {
     original: Arc<[u8]>,
@@ -69,6 +72,13 @@ enum EditOp {
 }
 
 impl EditOp {
+    fn requires_rewrite(&self) -> bool {
+        matches!(
+            self,
+            Self::Delete { .. } | Self::RemoveAnnotation { .. } | Self::SetInfo { .. }
+        )
+    }
+
     fn apply(&self, editor: &mut Editor) -> Result<(), String> {
         let result = match self {
             Self::Annotate { page, annot } => editor.add_annotation(*page, annot).map(|_| ()),
@@ -516,15 +526,48 @@ fn redo(doc: &mut OpenDoc) -> Result<Value, String> {
     Ok(edit_state(doc))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut temporary_name = path.as_os_str().to_os_string();
-    temporary_name.push(".tmp");
-    let temporary = PathBuf::from(temporary_name);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
+fn next_temporary_id() -> Result<usize, String> {
+    let mut current = TEMPORARY_COUNTER.load(Ordering::Relaxed);
+    loop {
+        let next = current
+            .checked_add(1)
+            .ok_or_else(|| "the temporary file counter is exhausted".to_owned())?;
+        match TEMPORARY_COUNTER.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Ok(current),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut created = None;
+    for _ in 0..128 {
+        let counter = next_temporary_id()?;
+        let mut temporary_name = path.as_os_str().to_os_string();
+        temporary_name.push(format!(".tmp.{}.{counter}", std::process::id()));
+        let temporary = PathBuf::from(temporary_name);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => {
+                created = Some((temporary, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(format!("could not create {}: {error}", temporary.display()));
+            }
+        }
+    }
+    let (temporary, mut file) =
+        created.ok_or_else(|| "could not create a unique temporary PDF file".to_owned())?;
     let result = (|| {
         match fs::metadata(path) {
             Ok(metadata) => file
@@ -564,9 +607,25 @@ fn save(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
         }
         _ => return Err("mode must be in_place or copy".to_owned()),
     };
-    atomic_write(&path, &doc.bytes)?;
-    if mode == "in_place" {
-        doc.history.original = Arc::clone(&doc.bytes);
+    let rewrite = doc.history.ops.iter().any(EditOp::requires_rewrite);
+    let bytes: Arc<[u8]> = if rewrite {
+        Arc::from(commands::rewritten_pdf(doc)?)
+    } else {
+        Arc::clone(&doc.bytes)
+    };
+
+    let replacement = if rewrite && mode == "in_place" {
+        Some(commands::open_bytes(Arc::clone(&bytes), path.clone())?)
+    } else {
+        None
+    };
+
+    atomic_write(&path, &bytes)?;
+
+    if let Some(replacement) = replacement {
+        *doc = replacement;
+    } else if mode == "in_place" {
+        doc.history.original = Arc::clone(&bytes);
         doc.history.ops.clear();
         doc.history.undone.clear();
     }

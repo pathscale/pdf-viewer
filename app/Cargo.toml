@@ -42,3 +42,5 @@ libc = "^0.2"
 nagoya = { version = "^0.1", features = ["reactor"] }
 brotli.workspace = true
 miniz_oxide = "^0.8"
+serde_json.workspace = true
+
