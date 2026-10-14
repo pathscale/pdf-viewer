@@ -137,6 +137,7 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
     let flavor = be32(woff, 4)?;
     let count = usize::from(be16(woff, 12)?);
     let mut tables = Vec::with_capacity(count);
+    let mut decoded_total = 0_u64;
     for index in 0..count {
         caps::turn("asset build: WOFF table");
         let entry = 44 + index * 20;
@@ -145,13 +146,15 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
         let compressed = be32(woff, entry + 8)? as usize;
         let original = be32(woff, entry + 12)? as usize;
         let checksum = be32(woff, entry + 16)?;
+        decoded_total = decoded_total.saturating_add(original as u64);
+        caps::check("decoded-bytes", decoded_total);
         let stored = woff
             .get(offset..offset + compressed)
             .ok_or_else(|| io::Error::other("WOFF table out of range"))?;
         let data = if compressed == original {
             stored.to_vec()
         } else {
-            miniz_oxide::inflate::decompress_to_vec_zlib(stored)
+            miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(stored, original)
                 .map_err(|_| io::Error::other("WOFF table inflate failed"))?
         };
         if data.len() != original {
@@ -210,6 +213,7 @@ fn main() {
             ("procs", 2),
             ("input-bytes", 67108864),
             ("iterations", 10000),
+            ("decoded-bytes", 134217728),
         ],
     );
     caps::stage("pdf-viewer-asset-build: dispatch");
