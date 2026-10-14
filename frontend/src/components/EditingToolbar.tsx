@@ -143,10 +143,7 @@ export function EditingToolbar(props: { editor: Editor }) {
         {editor.busy() ? <span role="status">Applying edit...</span> : null}
       </div>
       {encryptedSaveOpen() ? (
-        <EncryptedSaveDialog
-          editor={editor}
-          onClose={() => setEncryptedSaveOpen(false)}
-        />
+        <EncryptedSaveDialog editor={editor} onClose={() => setEncryptedSaveOpen(false)} />
       ) : null}
     </>
   );

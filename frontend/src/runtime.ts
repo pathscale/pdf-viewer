@@ -17,10 +17,7 @@ async function drain(): Promise<void> {
 
 // Native v1 commands share one open document. Keep rendering work serial and
 // skip queued jobs whose page or document has already been disposed.
-export function schedule<T>(
-  work: () => Promise<T>,
-  valid: () => boolean = () => true,
-): Promise<T> {
+export function schedule<T>(work: () => Promise<T>, valid: () => boolean = () => true): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     jobs.push(async () => {
       if (!valid()) {
@@ -149,4 +146,3 @@ export function deviceScale(): number {
   const ratio = window.devicePixelRatio;
   return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
 }
-

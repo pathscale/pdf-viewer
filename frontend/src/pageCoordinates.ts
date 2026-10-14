@@ -112,4 +112,3 @@ export function pdfTransform(size: PageSize): string {
       return `matrix(${unit} 0 0 ${-unit} ${-sx} ${height + sy})`;
   }
 }
-

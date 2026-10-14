@@ -5,8 +5,8 @@ import { api, isMock } from "./api";
 import { EditingToolbar } from "./components/EditingToolbar";
 import { AnnotationSidebar, InsertPdf, PropertiesDialog } from "./components/EditorPanels";
 import { IconButton } from "./components/IconButton";
-import { PasswordDialog } from "./components/PasswordDialog";
 import { Page } from "./components/Page";
+import { PasswordDialog } from "./components/PasswordDialog";
 import { Thumbnail } from "./components/Thumbnail";
 import { createEditor } from "./editing";
 import type { Preferences } from "./preferences";
@@ -220,7 +220,6 @@ export function App() {
         setInfo((previous) => (previous ? { ...previous, outline: [] } : previous));
       });
   }
-
 
   function adoptDocument(documentInfo: DocumentInfo): void {
     if (

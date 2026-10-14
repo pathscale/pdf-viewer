@@ -52,4 +52,3 @@
     "includes": ["**", "!node_modules", "!dist", "!*.config.ts", "!*.config.mjs"]
   }
 }
-
