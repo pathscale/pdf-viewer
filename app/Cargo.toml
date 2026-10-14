@@ -2,7 +2,7 @@
 name = "pdf-viewer"
 description = "A PDF viewer with page and reading views"
 version.workspace = true
-edition.workspace = true
+edition = "2024"
 license.workspace = true
 repository.workspace = true
 build = "build.rs"
