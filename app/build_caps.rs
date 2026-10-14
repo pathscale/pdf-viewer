@@ -15,7 +15,6 @@ pub struct Caps {
     budgets: BTreeMap<&'static str, Budget>,
     stage: Mutex<Arc<str>>,
     started: Instant,
-    args: Vec<OsString>,
 }
 static CAPS: OnceLock<Arc<Caps>> = OnceLock::new();
 static CHILDREN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
@@ -65,7 +64,7 @@ pub fn start(name: &'static str, defaults: &[(&'static str, u64)]) {
         values.insert(field, (hard, warn));
     }
     let mut original = std::env::args_os();
-    let mut args = vec![original.next().unwrap_or_default()];
+    let _ = original.next();
     let mut literal = false;
     while let Some(arg) = original.next() {
         if arg == "--" {
@@ -101,7 +100,6 @@ pub fn start(name: &'static str, defaults: &[(&'static str, u64)]) {
                 continue;
             }
         }
-        args.push(arg);
     }
     let mut budgets = BTreeMap::new();
     for (field, (hard, warning)) in values {
@@ -129,7 +127,6 @@ pub fn start(name: &'static str, defaults: &[(&'static str, u64)]) {
         budgets,
         stage: Mutex::new(Arc::from("startup")),
         started,
-        args,
     });
     CAPS.set(Arc::clone(&caps))
         .unwrap_or_else(|_| error("caps already started"));
@@ -148,18 +145,6 @@ pub fn start(name: &'static str, defaults: &[(&'static str, u64)]) {
 fn caps() -> &'static Arc<Caps> {
     CAPS.get().expect("application caps initialized")
 }
-pub fn args_os() -> std::vec::IntoIter<OsString> {
-    caps().args.clone().into_iter()
-}
-pub fn args() -> std::vec::IntoIter<String> {
-    args_os()
-        .map(|s| {
-            s.into_string()
-                .unwrap_or_else(|_| error("argument is not UTF-8"))
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-}
 pub fn stage(value: impl Into<Arc<str>>) {
     *caps().stage.lock().unwrap_or_else(|e| e.into_inner()) = value.into();
 }
@@ -177,7 +162,7 @@ pub fn check(field: &str, current: u64) {
             cap.name,
             current,
             budget.warn,
-            &*stage
+            *stage
         );
     }
     if current > budget.hard || (field == "cpu-secs" && CPU_HIT.load(Ordering::Relaxed)) {
@@ -188,23 +173,11 @@ pub fn check(field: &str, current: u64) {
             cap.name,
             current,
             budget.hard,
-            &*stage
+            *stage
         );
         stop_children();
         std::process::exit(124);
     }
-}
-pub fn child(pid: u32) {
-    CHILDREN
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(pid as i32);
-}
-pub fn reaped(pid: u32) {
-    CHILDREN
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .retain(|p| *p != pid as i32);
 }
 fn stop_children() {
     #[cfg(unix)]
@@ -247,25 +220,6 @@ fn stop_children() {
         }
     }
 }
-pub fn read(reader: impl Read) -> std::io::Result<String> {
-    let mut text = String::new();
-    reader
-        .take(limit("input-bytes") + 1)
-        .read_to_string(&mut text)?;
-    check("input-bytes", text.len() as u64);
-    Ok(text)
-}
-pub fn input(path: &std::path::Path) {
-    stage(path.to_string_lossy().into_owned());
-    let metadata =
-        std::fs::metadata(path).unwrap_or_else(|e| error(format!("{}: {e}", path.display())));
-    check("input-bytes", metadata.len());
-}
-pub fn read_file(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
-    let path = path.as_ref();
-    stage(path.to_string_lossy().into_owned());
-    read(std::fs::File::open(path)?)
-}
 pub fn turn(stage_name: impl Into<Arc<str>>) {
     stage(stage_name);
     let current = ITERATIONS.fetch_add(1, Ordering::Relaxed).saturating_add(1);
@@ -303,6 +257,10 @@ fn cpu_secs() -> u64 {
 extern "C" fn cpu_exceeded(_: libc::c_int) {
     // The timer emits the named error with its live stage and cleans up owned
     // child groups. The kernel hard limit remains the backstop one second later.
+    const MESSAGE: &[u8] = b"CAP_MAX_CPU_SECS: source=RLIMIT_CPU\n";
+    unsafe {
+        libc::write(2, MESSAGE.as_ptr().cast(), MESSAGE.len());
+    }
     CPU_HIT.store(true, Ordering::Relaxed);
 }
 #[cfg(unix)]
