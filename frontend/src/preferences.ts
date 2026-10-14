@@ -63,4 +63,3 @@ export function savePreferences(preferences: Preferences): void {
     // A restricted storage environment still allows preferences for this session.
   }
 }
-

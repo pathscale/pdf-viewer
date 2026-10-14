@@ -21,4 +21,3 @@ if (!(root instanceof HTMLElement)) {
 }
 
 render(() => <App />, root);
-

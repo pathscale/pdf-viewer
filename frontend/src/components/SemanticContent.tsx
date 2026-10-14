@@ -1,5 +1,4 @@
 import { createSignal, onSettled } from "solid-js";
-import { api } from "../api";
 import type {
   LinkTarget,
   SemanticBlock,
@@ -7,6 +6,7 @@ import type {
   SemanticPage,
   SemanticSpan,
 } from "../api";
+import { api } from "../api";
 import { clamp } from "../preferences";
 import { message, observeNear, schedule } from "../runtime";
 
@@ -72,9 +72,7 @@ function SpanContent(props: {
       ? props.page.links[part.link]
       : undefined;
   const scale =
-    Number.isFinite(part.size) && part.size > 0
-      ? clamp(part.size / props.baseSize, 0.75, 2)
-      : 1;
+    Number.isFinite(part.size) && part.size > 0 ? clamp(part.size / props.baseSize, 0.75, 2) : 1;
 
   return (
     <span
@@ -106,12 +104,7 @@ function BlockContent(props: {
   const baseSize = sizes[Math.floor(sizes.length / 2)] || 12;
   const content = () =>
     props.block.spans.map((span) => (
-      <SpanContent
-        span={span}
-        baseSize={baseSize}
-        page={props.page}
-        navigate={props.navigate}
-      />
+      <SpanContent span={span} baseSize={baseSize} page={props.page} navigate={props.navigate} />
     ));
   const kind = props.block.kind;
   const level =
@@ -131,10 +124,7 @@ function BlockContent(props: {
   return <p>{content()}</p>;
 }
 
-function SemanticImage(props: {
-  image: SemanticImageRef;
-  root: () => HTMLElement;
-}) {
+function SemanticImage(props: { image: SemanticImageRef; root: () => HTMLElement }) {
   const [source, setSource] = createSignal<string | null>(null);
   const [error, setError] = createSignal("");
   let figure!: HTMLElement;
@@ -262,9 +252,7 @@ export function SemanticContent(props: ContentProps) {
             </ul>
           );
         }
-        return (
-          <BlockContent block={group.block} page={props.page} navigate={props.navigate} />
-        );
+        return <BlockContent block={group.block} page={props.page} navigate={props.navigate} />;
       })}
       {!props.page.refusal && groups.length === 0 ? (
         <p class="muted">This page has no extractable text or images.</p>
@@ -274,13 +262,10 @@ export function SemanticContent(props: ContentProps) {
           {unusedLinks.map((link) => {
             const index = targetPage(link.target);
             const text = index !== null ? `Go to page ${index + 1}` : link.target.uri || "Link";
-            return (
-              <SemanticAnchor target={link.target} text={text} navigate={props.navigate} />
-            );
+            return <SemanticAnchor target={link.target} text={text} navigate={props.navigate} />;
           })}
         </nav>
       ) : null}
     </div>
   );
 }
-
