@@ -66,7 +66,46 @@ fn open_error(error: pdf_toolkit::core::DocError, password_supplied: bool) -> St
 pub(crate) fn source(bytes: &Arc<[u8]>) -> Result<PdfSource, String> {
     PdfSource::new(Arc::clone(bytes)).map_err(|error| error.to_string())
 }
+fn info_text(bytes: &[u8]) -> String {
+    if let Some(body) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        return String::from_utf8_lossy(body).into_owned();
+    }
+    if let Some(body) = bytes
+        .strip_prefix(&[0xfe, 0xff])
+        .or_else(|| bytes.strip_prefix(&[0xff, 0xfe]))
+    {
+        let little = bytes.starts_with(&[0xff, 0xfe]);
+        let (chunks, remainder) = body.as_chunks::<2>();
+        let units = chunks.iter().map(|pair| {
+            let pair = [pair[0], pair[1]];
+            if little {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        });
+        let mut text: String = char::decode_utf16(units)
+            .map(|character| character.unwrap_or('\u{fffd}'))
+            .collect();
+        if !remainder.is_empty() {
+            text.push('\u{fffd}');
+        }
+        return text;
+    }
+    bytes
+        .iter()
+        .map(|&byte| {
+            pdf_toolkit::text::encoding::BaseEncoding::PdfDoc
+                .unicode(byte)
+                .unwrap_or(if byte == 0 { '\0' } else { '\u{fffd}' })
+        })
+        .collect()
+}
+
 fn info_strings(document: &Document) -> [Option<String>; 4] {
+    if !document.decryptable() {
+        return [None, None, None, None];
+    }
     let Some(info_ref) = document.info_ref() else {
         return [None, None, None, None];
     };
@@ -82,13 +121,14 @@ fn info_strings(document: &Document) -> [Option<String>; 4] {
     let mut author = None;
     let mut subject = None;
     let mut keywords = None;
+    let mut decode = |string| info_text(&resolver.decode_string(info_ref, string));
     for (key, value) in dictionary.iter() {
         let key = key.decoded();
         match key.as_ref() {
-            b"Title" => title = value.as_str().map(|string| string.decode()),
-            b"Author" => author = value.as_str().map(|string| string.decode()),
-            b"Subject" => subject = value.as_str().map(|string| string.decode()),
-            b"Keywords" => keywords = value.as_str().map(|string| string.decode()),
+            b"Title" => title = value.as_str().map(&mut decode),
+            b"Author" => author = value.as_str().map(&mut decode),
+            b"Subject" => subject = value.as_str().map(&mut decode),
+            b"Keywords" => keywords = value.as_str().map(&mut decode),
             _ => {}
         }
     }
@@ -533,8 +573,28 @@ fn outline(doc: &mut OpenDoc) -> Result<Value, String> {
         pages.push(cached.clone());
     }
 
+    let mut page_ids = Vec::new();
+    page_ids
+        .try_reserve_exact(pages.len())
+        .map_err(|_| "could not allocate the outline page IDs".to_owned())?;
+    let mut page_lookup = Vec::new();
+    page_lookup
+        .try_reserve_exact(pages.len())
+        .map_err(|_| "could not allocate the outline page lookup".to_owned())?;
+    for page in &pages {
+        page_ids.push(page.id);
+        page_lookup.push((page.id.number(), page.id.generation(), page.index));
+    }
+    page_lookup.sort_unstable();
+
     let mut resolver = doc.document.resolver();
-    let items = pdf_toolkit::text::links::outline_with_pages(&mut resolver, &pages);
+    let items = pdf_toolkit::text::links::outline_with_pages(
+        &mut resolver,
+        &page_ids,
+        &pages,
+        &page_lookup,
+    )
+    .map_err(pdf_error)?;
     let outline: Vec<Value> = items
         .into_iter()
         .map(|item| {
