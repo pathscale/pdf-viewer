@@ -92,39 +92,37 @@ export function Thumbnail(props: ThumbnailProps) {
   const disabled = () => props.editor.busy() || !props.editor.available();
 
   return (
-    <div
-      class="thumbnail-entry"
-      draggable={props.editor.enabled() && !disabled() ? "true" : "false"}
-      onDragStart={(event) => {
-        if (!props.editor.enabled() || disabled()) {
-          event.preventDefault();
-          return;
-        }
-        props.editor.startDrag(props.index);
-        event.dataTransfer?.setData("text/plain", String(props.index));
-      }}
-      onDragEnd={props.editor.endDrag}
-      onDragOver={(event) => {
-        if (props.editor.enabled() && props.editor.dragging() !== null && !disabled()) {
-          event.preventDefault();
-        }
-      }}
-      onDrop={(event) => {
-        if (!props.editor.enabled() || disabled()) return;
-        const from = props.editor.dragging();
-        if (from === null) return;
-        event.preventDefault();
-        props.editor.endDrag();
-        void props.editor.move(from, props.index);
-      }}
-    >
+    <div class="thumbnail-entry">
       <button
         type="button"
         class="thumbnail-button"
+        draggable={props.editor.enabled() && !disabled() ? "true" : "false"}
         aria-label={`Go to page ${props.index + 1}`}
         aria-current={props.current() === props.index ? "page" : undefined}
         title={error() || `Go to page ${props.index + 1}`}
         onClick={() => props.navigate(props.index)}
+        onDragStart={(event) => {
+          if (!props.editor.enabled() || disabled()) {
+            event.preventDefault();
+            return;
+          }
+          props.editor.startDrag(props.index);
+          event.dataTransfer?.setData("text/plain", String(props.index));
+        }}
+        onDragEnd={props.editor.endDrag}
+        onDragOver={(event) => {
+          if (props.editor.enabled() && props.editor.dragging() !== null && !disabled()) {
+            event.preventDefault();
+          }
+        }}
+        onDrop={(event) => {
+          if (!props.editor.enabled() || disabled()) return;
+          const from = props.editor.dragging();
+          if (from === null) return;
+          event.preventDefault();
+          props.editor.endDrag();
+          void props.editor.move(from, props.index);
+        }}
         ref={(element) => {
           button = element;
         }}
@@ -157,7 +155,8 @@ export function Thumbnail(props: ThumbnailProps) {
         <span>{props.index + 1}</span>
       </button>
       {props.editor.enabled() ? (
-        <div class="thumbnail-actions" role="group" aria-label={`Organize page ${props.index + 1}`}>
+        <fieldset class="thumbnail-actions control-group">
+          <legend class="visually-hidden">Organize page {props.index + 1}</legend>
           <IconButton
             glyph="move-up"
             label={`Move page ${props.index + 1} earlier`}
@@ -198,7 +197,7 @@ export function Thumbnail(props: ThumbnailProps) {
               void props.editor.deletePage(props.index);
             }}
           />
-        </div>
+        </fieldset>
       ) : null}
     </div>
   );
