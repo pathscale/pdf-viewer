@@ -16,6 +16,10 @@ use pdf_toolkit::text::semantic::{LinkTarget, SemanticKind, SemanticPage, Semant
 use serde_json::{Value, json};
 
 pub(crate) const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PIXELS: u64 = 16_000_000;
+fn pixel_limit() -> u64 {
+    MAX_PIXELS.min(crate::app_caps::hard("pixels"))
+}
 const MAX_SEARCH_HITS: u64 = 10_000;
 const MAX_QUERY_BYTES: usize = 4096;
 const MAX_SEARCH_TEXT_BYTES: usize = 4 * 1024 * 1024;
@@ -162,6 +166,7 @@ pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
     }
     let length =
         usize::try_from(length).map_err(|_| refusal("source_bytes", length, MAX_SOURCE_BYTES))?;
+    crate::app_caps::reserve_bytes((length as u64).saturating_mul(2));
     let mut storage = Vec::new();
     storage
         .try_reserve_exact(length)
@@ -213,8 +218,7 @@ pub(crate) fn bench_first_page(path: &Path) -> Result<Value, String> {
         .as_f64()
         .ok_or_else(|| "the page has invalid display dimensions".to_owned())?;
     // Default page view: zoom, font scale and device scale are all one.
-    let scale =
-        (96.0_f64 / 72.0).min((crate::app_caps::hard("pixels") as f64 / (width * height)).sqrt());
+    let scale = (96.0_f64 / 72.0).min((pixel_limit() as f64 / (width * height)).sqrt());
     render(doc, 0, scale)?;
     let first_page_ms = started.elapsed().as_secs_f64() * 1000.0;
     // Match Page.tsx: the text layer loads after the first paint.
@@ -263,8 +267,10 @@ fn open_bytes_with_password(
     crate::app_caps::stage(Arc::<str>::from(format!("parse PDF {}", path.display())));
     crate::app_caps::check("input-bytes", bytes.len() as u64);
     let limits = Limits {
-        max_file_bytes: crate::app_caps::hard("input-bytes"),
-        max_pages: crate::app_caps::hard("iterations").min(u32::MAX as u64) as u32,
+        max_file_bytes: MAX_SOURCE_BYTES.min(crate::app_caps::hard("input-bytes")),
+        max_pages: Limits::default()
+            .max_pages
+            .min(crate::app_caps::hard("iterations").min(u32::MAX as u64) as u32),
         ..Limits::default()
     };
     // Repair mode tries the strict open first; damaged files (broken xref, object streams or
@@ -295,6 +301,11 @@ fn open_bytes_with_password(
         }
         let count =
             usize::try_from(hint).map_err(|_| "the page count is out of range".to_owned())?;
+        crate::app_caps::check("iterations", count as u64);
+        crate::app_caps::check("cache-entries", count as u64);
+        crate::app_caps::reserve_bytes(
+            (count as u64).saturating_mul(std::mem::size_of::<Option<Page>>() as u64),
+        );
         let mut pages = Vec::new();
         pages
             .try_reserve_exact(count)
@@ -306,6 +317,10 @@ fn open_bytes_with_password(
                     match result {
                         Ok(page) if count == 0 => {
                             crate::app_caps::check("iterations", pages.len() as u64 + 1);
+                            crate::app_caps::check("cache-entries", pages.len() as u64 + 1);
+                            crate::app_caps::reserve_bytes(
+                                std::mem::size_of::<Option<Page>>() as u64
+                            );
                             pages.push(Some(page));
                         }
                         Ok(page) => {
@@ -336,7 +351,12 @@ fn open_bytes_with_password(
         bytes,
         document,
         pages,
-        font_cache: FontCache::default(),
+        // An explicit entry cap disables hidden font-cache retention. Font parsing is unchanged.
+        font_cache: if crate::app_caps::hard("cache-entries") != u64::MAX - 1 {
+            FontCache::new(0)
+        } else {
+            FontCache::default()
+        },
         semantic: None,
         semantic_next: 0,
         summary,
@@ -450,7 +470,7 @@ fn capped_scale(width: f64, height: f64, requested: f64) -> Result<f32, String> 
         return Err("the page dimensions cannot be rasterized".to_owned());
     }
     let area = f64::from(width) * f64::from(height);
-    let maximum = crate::app_caps::hard("pixels") as f64;
+    let maximum = pixel_limit() as f64;
     let bound = (maximum / area)
         .sqrt()
         .min(maximum / f64::from(width))
@@ -465,45 +485,32 @@ fn capped_scale(width: f64, height: f64, requested: f64) -> Result<f32, String> 
         let pixels_high = (height * scale).ceil().max(1.0) as u64;
         if pixels_wide
             .checked_mul(pixels_high)
-            .is_some_and(|pixels| pixels <= crate::app_caps::hard("pixels"))
+            .is_some_and(|pixels| pixels <= pixel_limit())
         {
             crate::app_caps::check("pixels", pixels_wide.saturating_mul(pixels_high));
             return Ok(scale);
         }
         scale *= 0.99;
     }
-    Err(refusal(
-        "raster_pixels",
-        u64::MAX,
-        crate::app_caps::hard("pixels"),
-    ))
+    Err(refusal("raster_pixels", u64::MAX, pixel_limit()))
 }
 
 fn png_bytes(raster: &Raster) -> Result<Vec<u8>, String> {
     let pixels = u64::from(raster.width)
         .checked_mul(u64::from(raster.height))
-        .ok_or_else(|| refusal("raster_pixels", u64::MAX, crate::app_caps::hard("pixels")))?;
+        .ok_or_else(|| refusal("raster_pixels", u64::MAX, pixel_limit()))?;
     crate::app_caps::check("pixels", pixels);
-    if pixels == 0 || pixels > crate::app_caps::hard("pixels") {
-        return Err(refusal(
-            "raster_pixels",
-            pixels,
-            crate::app_caps::hard("pixels"),
-        ));
+    if pixels == 0 || pixels > pixel_limit() {
+        return Err(refusal("raster_pixels", pixels, pixel_limit()));
     }
     let expected = pixels
         .checked_mul(4)
         .and_then(|length| usize::try_from(length).ok())
-        .ok_or_else(|| {
-            refusal(
-                "raster_bytes",
-                u64::MAX,
-                crate::app_caps::hard("pixels") * 4,
-            )
-        })?;
+        .ok_or_else(|| refusal("raster_bytes", u64::MAX, pixel_limit() * 4))?;
     if raster.rgba.len() != expected {
         return Err("the raster buffer has an invalid length".to_owned());
     }
+    crate::app_caps::reserve_bytes((expected as u64).saturating_mul(2));
     let bytes = encode_png(raster);
     if bytes.is_empty() {
         return Err("PNG encoding failed".to_owned());
@@ -532,6 +539,10 @@ fn render(doc: &mut OpenDoc, index: usize, requested: f64) -> Result<Value, Stri
         scale,
         fallback_font: Some(fallback_font()),
     };
+    let raster_bytes = ((width * f64::from(scale)).ceil().max(1.0) as u64)
+        .saturating_mul((height * f64::from(scale)).ceil().max(1.0) as u64)
+        .saturating_mul(4);
+    crate::app_caps::reserve_bytes(raster_bytes);
     let mut resolver = doc.document.resolver();
     let raster =
         pdf_toolkit::raster::render_page(&mut resolver, page, &options, [255, 255, 255, 255])
@@ -564,12 +575,7 @@ fn object_arg(args: &Value) -> Result<ObjectRef, String> {
 fn image(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
     require_decryptable(doc)?;
     let mut resolver = doc.document.resolver();
-    let image = load_image(
-        &mut resolver,
-        object_arg(args)?,
-        crate::app_caps::hard("pixels"),
-    )
-    .map_err(pdf_error)?;
+    let image = load_image(&mut resolver, object_arg(args)?, pixel_limit()).map_err(pdf_error)?;
     let (mime, data) = match image.data {
         ImageData::Jpeg(data) => ("image/jpeg", data),
         ImageData::Pixels { rgba } => {
@@ -849,6 +855,7 @@ fn search(doc: &mut OpenDoc, args: &Value) -> Result<Value, String> {
             }
             let folded = text.to_lowercase();
             for (offset, _) in folded.match_indices(needle.as_str()) {
+                crate::app_caps::check("cache-entries", hits.len() as u64 + 1);
                 hits.push(json!({
                     "page": index,
                     "snippet": snippet(&text, offset),

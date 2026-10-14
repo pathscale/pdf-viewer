@@ -136,6 +136,8 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
     }
     let flavor = be32(woff, 4)?;
     let count = usize::from(be16(woff, 12)?);
+    caps::check("cache-entries", count as u64);
+    caps::reserve_bytes((count as u64).saturating_mul(32));
     let mut tables = Vec::with_capacity(count);
     let mut decoded_total = 0_u64;
     for index in 0..count {
@@ -148,6 +150,7 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
         let checksum = be32(woff, entry + 16)?;
         decoded_total = decoded_total.saturating_add(original as u64);
         caps::check("decoded-bytes", decoded_total);
+        caps::reserve_bytes(original as u64);
         let stored = woff
             .get(offset..offset + compressed)
             .ok_or_else(|| io::Error::other("WOFF table out of range"))?;
@@ -168,7 +171,16 @@ fn woff_to_sfnt(woff: &[u8]) -> io::Result<Vec<u8>> {
         search *= 2;
         selector += 1;
     }
+    let sfnt_bytes = tables
+        .iter()
+        .fold(12u64 + count as u64 * 16, |n, (_, _, data)| {
+            n.saturating_add(data.len().div_ceil(4) as u64 * 4)
+        });
+    caps::check("decoded-bytes", decoded_total.saturating_add(sfnt_bytes));
+    caps::reserve_bytes(sfnt_bytes);
     let mut out = Vec::new();
+    out.try_reserve_exact(usize::try_from(sfnt_bytes).map_err(io::Error::other)?)
+        .map_err(io::Error::other)?;
     out.extend_from_slice(&flavor.to_be_bytes());
     out.extend_from_slice(&(count as u16).to_be_bytes());
     out.extend_from_slice(&((search * 16) as u16).to_be_bytes());
