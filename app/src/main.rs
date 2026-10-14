@@ -46,7 +46,7 @@ fn run() -> izumo::AppResult {
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(path) = std::env::args_os().nth(1) {
+        if let Some(path) = app_caps::args_os().nth(1) {
             macos::enqueue_path(std::path::PathBuf::from(path));
         }
         if let Err(error) = macos::register_open_document_handler() {
@@ -56,7 +56,7 @@ fn run() -> izumo::AppResult {
     }
 
     #[cfg(not(target_os = "macos"))]
-    if let Some(path) = std::env::args_os().nth(1) {
+    if let Some(path) = app_caps::args_os().nth(1) {
         match commands::open_path(&state, std::path::Path::new(&path)) {
             Ok(reply) => startup = Some(reply),
             Err(error) => eprintln!("pdf-viewer: {error}"),
@@ -106,8 +106,13 @@ fn run() -> izumo::AppResult {
 #[global_allocator]
 static ALLOC: rusty_alloc::RustyAlloc = rusty_alloc::RustyAlloc;
 
+#[path = "app_caps.rs"]
+mod app_caps;
+
 fn main() {
-    let first_argument = std::env::args_os().nth(1);
+    let _caps = app_caps::start([2147483648, 3600, 43200, 512, 2, 64, 268435456, 10000, 10000]);
+    app_caps::stage("app/src/main.rs: running");
+    let first_argument = app_caps::args_os().nth(1);
 
     #[cfg(target_os = "macos")]
     {
@@ -139,11 +144,11 @@ fn main() {
         }
     }
 
-    let result = if std::env::args_os().nth(1).as_deref()
+    let result = if app_caps::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new("--bench-first-page"))
     {
         (|| {
-            let mut args = std::env::args_os().skip(2);
+            let mut args = app_caps::args_os().skip(2);
             let path = args
                 .next()
                 .ok_or_else(|| "usage: pdf-viewer --bench-first-page <file.pdf>".to_owned())?;

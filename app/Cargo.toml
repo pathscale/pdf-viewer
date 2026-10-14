@@ -20,6 +20,7 @@ default = []
 system-fonts = ["blitz-dom/system-fonts", "blitz-script/system-fonts"]
 
 [dependencies]
+libc = "^0.2.189"
 pdf-toolkit.workspace = true
 izumo.workspace = true
 blitz-dom = { workspace = true, features = ["woff"] }
@@ -27,7 +28,7 @@ blitz-script.workspace = true
 blitz-traits.workspace = true
 serde_json.workspace = true
 brotli.workspace = true
-nagoya.workspace = true
+nagoya = { version = "^0.1.12", features = ["reactor"] }
 rusty_alloc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

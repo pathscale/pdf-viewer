@@ -155,7 +155,9 @@ pub(crate) fn read_source(path: &Path) -> Result<Arc<[u8]>, String> {
     if !metadata.is_file() {
         return Err("the PDF path must name a regular file".to_owned());
     }
+    crate::app_caps::stage(Arc::<str>::from(format!("open PDF {}", path.display())));
     let length = metadata.len();
+    crate::app_caps::check("input-bytes", length);
     if length > MAX_SOURCE_BYTES {
         return Err(refusal("source_bytes", length, MAX_SOURCE_BYTES));
     }
@@ -258,7 +260,13 @@ fn open_bytes_with_password(
     path: PathBuf,
     password: Option<&[u8]>,
 ) -> Result<OpenDoc, String> {
-    let limits = Limits::default();
+    crate::app_caps::stage(Arc::<str>::from(format!("parse PDF {}", path.display())));
+    crate::app_caps::check("input-bytes", bytes.len() as u64);
+    let limits = Limits {
+        max_file_bytes: crate::app_caps::hard("input-bytes"),
+        max_pages: crate::app_caps::hard("iterations").min(u32::MAX as u64) as u32,
+        ..Limits::default()
+    };
     // Repair mode tries the strict open first; damaged files (broken xref, object streams or
     // page tree) fall back to the recovering reader instead of being refused.
     let document =
@@ -296,7 +304,10 @@ fn open_bytes_with_password(
             Ok(walk) => {
                 for result in walk {
                     match result {
-                        Ok(page) if count == 0 => pages.push(Some(page)),
+                        Ok(page) if count == 0 => {
+                            crate::app_caps::check("iterations", pages.len() as u64 + 1);
+                            pages.push(Some(page));
+                        }
                         Ok(page) => {
                             pages[0] = Some(page);
                             break;
@@ -1121,6 +1132,7 @@ fn dispatch(
     command: &str,
     args: Value,
 ) -> Result<Value, String> {
+    crate::app_caps::stage(Arc::<str>::from(format!("PDF command {command}")));
     if !args.is_object() {
         return Err("command arguments must be an object".to_owned());
     }
