@@ -109,23 +109,114 @@ static ALLOC: rusty_alloc::RustyAlloc = rusty_alloc::RustyAlloc;
 #[path = "app_caps.rs"]
 mod app_caps;
 
+fn usage() -> &'static str {
+    concat!(
+        "Usage: pdf-viewer [OPTIONS] [FILE.pdf]\n\n",
+        "Options:\n",
+        "  -h, --help                 Print this help and exit\n",
+        "  -V, --version              Print version information and exit\n",
+        "      --bench-first-page FILE.pdf\n",
+        "                             Benchmark opening and rendering the first page\n",
+        "      --install-app          Install the macOS application bundle\n",
+        "      --uninstall-app        Remove the macOS application bundle\n",
+    )
+}
+
+fn is_option_like(argument: &std::ffi::OsStr) -> bool {
+    argument.to_string_lossy().starts_with('-')
+}
+
 fn main() {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+
+    if arguments.len() == 1 && matches!(arguments[0].to_str(), Some("--version" | "-V")) {
+        println!("pdf-viewer {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if arguments.len() == 1 && matches!(arguments[0].to_str(), Some("--help" | "-h")) {
+        print!("{}", usage());
+        return;
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| matches!(argument.to_str(), Some("--version" | "-V")))
+    {
+        eprintln!("pdf-viewer: --version does not accept arguments");
+        std::process::exit(2);
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| matches!(argument.to_str(), Some("--help" | "-h")))
+    {
+        eprintln!("pdf-viewer: --help does not accept arguments");
+        std::process::exit(2);
+    }
+
+    if arguments
+        .first()
+        .is_some_and(|argument| is_option_like(argument) && argument != "--bench-first-page")
+    {
+        let option = arguments[0].to_string_lossy();
+        if !matches!(option.as_ref(), "--install-app" | "--uninstall-app") {
+            eprintln!("pdf-viewer: unknown option {option}\n{}", usage());
+            std::process::exit(2);
+        }
+        if arguments.len() != 1 {
+            eprintln!("pdf-viewer: {option} does not accept arguments");
+            std::process::exit(2);
+        }
+    }
+    if let Some(option) = arguments
+        .iter()
+        .skip(1)
+        .find(|argument| is_option_like(argument))
+    {
+        eprintln!("pdf-viewer: unexpected option {}", option.to_string_lossy());
+        std::process::exit(2);
+    }
+    if arguments.len() > 1
+        && !matches!(arguments[0].to_str(), Some("--bench-first-page"))
+        && !matches!(
+            arguments[0].to_str(),
+            Some("--install-app" | "--uninstall-app")
+        )
+    {
+        eprintln!("pdf-viewer: expected at most one PDF path\n{}", usage());
+        std::process::exit(2);
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "--bench-first-page")
+        && arguments.len() != 2
+    {
+        eprintln!("pdf-viewer: --bench-first-page requires exactly one PDF path");
+        std::process::exit(2);
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| !is_option_like(argument))
+        && arguments.len() > 1
+    {
+        eprintln!("pdf-viewer: expected at most one PDF path\n{}", usage());
+        std::process::exit(2);
+    }
+
     let _caps = app_caps::start([
         2147483648, 3600, 43200, 512, 2, 64, 268435456, 10000, 10000, 16000000,
     ]);
     app_caps::stage("app/src/main.rs: running");
-    let first_argument = app_caps::args_os().nth(1);
+    let first_argument = arguments.first();
 
     #[cfg(target_os = "macos")]
     {
-        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--install-app")) {
+        if first_argument.is_some_and(|arg| arg == "--install-app") {
             if let Err(error) = macos::install_app() {
                 eprintln!("pdf-viewer: {error}");
                 std::process::exit(1);
             }
             return;
         }
-        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--uninstall-app")) {
+        if first_argument.is_some_and(|arg| arg == "--uninstall-app") {
             if let Err(error) = macos::uninstall_app() {
                 eprintln!("pdf-viewer: {error}");
                 std::process::exit(1);
@@ -136,27 +227,19 @@ fn main() {
 
     #[cfg(not(target_os = "macos"))]
     {
-        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--install-app")) {
+        if first_argument.is_some_and(|arg| arg == "--install-app") {
             eprintln!("pdf-viewer: --install-app is macOS-only");
             std::process::exit(1);
         }
-        if first_argument.as_deref() == Some(std::ffi::OsStr::new("--uninstall-app")) {
+        if first_argument.is_some_and(|arg| arg == "--uninstall-app") {
             eprintln!("pdf-viewer: --uninstall-app is macOS-only");
             std::process::exit(1);
         }
     }
 
-    let result = if app_caps::args_os().nth(1).as_deref()
-        == Some(std::ffi::OsStr::new("--bench-first-page"))
-    {
+    let result = if first_argument.is_some_and(|arg| arg == "--bench-first-page") {
         (|| {
-            let mut args = app_caps::args_os().skip(2);
-            let path = args
-                .next()
-                .ok_or_else(|| "usage: pdf-viewer --bench-first-page <file.pdf>".to_owned())?;
-            if args.next().is_some() {
-                return Err("usage: pdf-viewer --bench-first-page <file.pdf>".to_owned());
-            }
+            let path = &arguments[1];
             let reply = commands::bench_first_page(std::path::Path::new(&path))?;
             writeln!(std::io::stdout().lock(), "{reply}")
                 .map_err(|error| format!("could not write benchmark result: {error}"))

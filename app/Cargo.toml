@@ -26,6 +26,8 @@ izumo.workspace = true
 blitz-dom = { workspace = true, features = ["woff"] }
 blitz-script.workspace = true
 blitz-traits.workspace = true
+# blitz-script 0.5.x expects the mpsc API; debug-control 0.3.9 changed it.
+blitz-debug-control = { package = "ps-blitz-debug-control", version = "=0.3.8" }
 serde_json.workspace = true
 brotli.workspace = true
 nagoya = { version = "^0.1.12", features = ["reactor"] }
@@ -42,3 +44,4 @@ libc = "^0.2.189"
 nagoya = { version = "^0.1.12", features = ["reactor"] }
 brotli.workspace = true
 miniz_oxide = "^0.8"
+serde_json.workspace = true
