@@ -21,8 +21,11 @@ file directly on any platform.
 
 ## License
 
-MIT. Text in unembedded standard fonts is drawn with Inter Regular (SIL Open Font License 1.1,
-`app/assets/Inter-LICENSE`), positioned by the PDF's own glyph widths.
+MIT. Unembedded fonts use installed Times New Roman, Arial and Courier New faces on macOS/Windows,
+or Liberation faces in standard Linux font directories, with separate regular, bold and italic styles.
+OS fonts are read at runtime and are never redistributed. When unavailable, Inter Regular
+(SIL Open Font License 1.1, `app/assets/Inter-LICENSE`) supplies the outlines with synthetic bold/italic.
+Substitute outlines are width-matched to the PDF's advances; embedded fonts retain their own outlines.
 
 Run `pdf-viewer --bench-first-page <file.pdf>` to measure the first page without creating a window or
 event loop. On success it prints one JSON line with `file`, `open_ms`, `first_page_ms` and `pages`.
