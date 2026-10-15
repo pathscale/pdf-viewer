@@ -20,7 +20,7 @@ default = []
 system-fonts = ["blitz-dom/system-fonts", "blitz-script/system-fonts"]
 
 [dependencies]
-libc = "^0.2.189"
+libc = "^0.2"
 pdf-toolkit.workspace = true
 izumo.workspace = true
 blitz-dom = { workspace = true, features = ["woff"] }
@@ -28,7 +28,7 @@ blitz-script.workspace = true
 blitz-traits.workspace = true
 serde_json.workspace = true
 brotli.workspace = true
-nagoya = { version = "^0.1.12", features = ["reactor"] }
+nagoya = { version = "^0.1", features = ["reactor"] }
 rusty_alloc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -38,7 +38,7 @@ objc2-app-kit = "^0.3"
 block2 = "^0.6"
 
 [build-dependencies]
-libc = "^0.2.189"
-nagoya = { version = "^0.1.12", features = ["reactor"] }
+libc = "^0.2"
+nagoya = { version = "^0.1", features = ["reactor"] }
 brotli.workspace = true
 miniz_oxide = "^0.8"

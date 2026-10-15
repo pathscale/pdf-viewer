@@ -538,6 +538,7 @@ fn render(doc: &mut OpenDoc, index: usize, requested: f64) -> Result<Value, Stri
     let options = RenderOptions {
         scale,
         fallback_font: Some(fallback_font()),
+        fallback_fonts: crate::fonts::fallback(),
     };
     let raster_bytes = ((width * f64::from(scale)).ceil().max(1.0) as u64)
         .saturating_mul((height * f64::from(scale)).ceil().max(1.0) as u64)

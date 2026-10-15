@@ -160,12 +160,14 @@ pub fn document(url: &str) -> Result<blitz_script::ScriptDocument, String> {
     }
     let html = decompress(HTML_BR, HTML_LEN, "HTML")?;
     let css = decompress(CSS_BR, CSS_LEN, "CSS")?;
+    let css = format!("{css}\n{}", crate::fonts::READING_CSS);
     // The interface's page images and bundled fonts are data: URLs, which the
     // document only loads through a net provider.
     let net: std::sync::Arc<dyn blitz_traits::net::NetProvider> =
         std::sync::Arc::new(crate::data_url::DataUrlProvider);
     let config = blitz_dom::DocumentConfig {
         base_url: Some(url.to_owned()),
+        font_ctx: Some(crate::fonts::reading_context()),
         net_provider: Some(net),
         ..Default::default()
     };

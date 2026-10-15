@@ -3,6 +3,7 @@
 mod commands;
 mod data_url;
 mod editing;
+mod fonts;
 mod frontend;
 #[cfg(target_os = "macos")]
 mod macos;
