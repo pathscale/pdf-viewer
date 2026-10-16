@@ -516,7 +516,8 @@ export function App() {
           {editor.state().dirty ? "* " : ""}
           {info()?.title || "PDF Viewer"}
         </span>
-        <div class="view-switch" role="group" aria-label="Document view">
+        <fieldset class="view-switch control-group">
+          <legend class="visually-hidden">Document view</legend>
           <Button
             type="button"
             class="viewer-button"
@@ -533,8 +534,9 @@ export function App() {
           >
             Reading
           </Button>
-        </div>
-        <div class="zoom-controls" role="group" aria-label="Zoom">
+        </fieldset>
+        <fieldset class="zoom-controls control-group">
+          <legend class="visually-hidden">Zoom</legend>
           <IconButton
             label="Zoom out (Cmd+minus)"
             glyph="−"
@@ -554,7 +556,7 @@ export function App() {
             pressed={preferences().fitWidth}
             onClick={requestFit}
           />
-        </div>
+        </fieldset>
         <form
           class="page-controls"
           onSubmit={(event) => {

@@ -44,7 +44,8 @@ export function EditingToolbar(props: { editor: Editor }) {
   return (
     <>
       <div class="editing-toolbar" role="toolbar" aria-label="PDF editing">
-        <div class="editing-tools" role="group" aria-label="Annotation tool">
+        <fieldset class="editing-tools control-group">
+          <legend class="visually-hidden">Annotation tool</legend>
           {TOOLS.map((item) => (
             <IconButton
               glyph={item.value}
@@ -55,8 +56,9 @@ export function EditingToolbar(props: { editor: Editor }) {
               onClick={() => editor.chooseTool(item.value)}
             />
           ))}
-        </div>
-        <div class="editing-colors" role="group" aria-label="Annotation colour">
+        </fieldset>
+        <fieldset class="editing-colors control-group">
+          <legend class="visually-hidden">Annotation colour</legend>
           {COLORS.map((item) => (
             <button
               type="button"
@@ -73,7 +75,7 @@ export function EditingToolbar(props: { editor: Editor }) {
               onClick={() => editor.setColor([...item.value] as Color)}
             />
           ))}
-        </div>
+        </fieldset>
         {editor.tool() === "highlight" ? (
           <label class="editing-opacity">
             <span>Opacity</span>
@@ -93,7 +95,8 @@ export function EditingToolbar(props: { editor: Editor }) {
             <output>{Math.round(editor.opacity() * 100)}%</output>
           </label>
         ) : null}
-        <div class="editing-tools" role="group" aria-label="Edit history and saving">
+        <fieldset class="editing-tools control-group">
+          <legend class="visually-hidden">Edit history and saving</legend>
           <IconButton
             glyph="undo"
             label="Undo (Cmd+Z)"
@@ -139,7 +142,7 @@ export function EditingToolbar(props: { editor: Editor }) {
           >
             Save encrypted copy
           </Button>
-        </div>
+        </fieldset>
         {editor.busy() ? <span role="status">Applying edit...</span> : null}
       </div>
       {encryptedSaveOpen() ? (

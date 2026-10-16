@@ -73,7 +73,14 @@ fn embed() -> io::Result<()> {
     // The repo builds from frontend/dist; the published crate carries the same bundle in ui/.
     let manifest = PathBuf::from(manifest);
     let repo_dist = manifest.join("../frontend/dist");
-    let dist = if repo_dist.join("index.html").is_file() {
+    let repo_package = manifest.join("../frontend/package.json");
+    let trusted_frontend = caps::bytes(&repo_package)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|package| {
+            package.get("name").and_then(serde_json::Value::as_str) == Some("pdf-viewer-frontend")
+        });
+    let dist = if trusted_frontend && repo_dist.join("index.html").is_file() {
         repo_dist
     } else {
         manifest.join("ui")
@@ -81,6 +88,7 @@ fn embed() -> io::Result<()> {
     let output = PathBuf::from(output);
 
     println!("cargo:rerun-if-changed=../frontend");
+    println!("cargo:rerun-if-changed=../frontend/package.json");
     println!("cargo:rerun-if-changed=../frontend/dist");
     println!("cargo:rerun-if-changed=ui");
     for name in ["index.html", "app.js", "app.css"] {
