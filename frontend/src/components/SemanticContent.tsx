@@ -175,7 +175,10 @@ function SemanticImage(props: { image: SemanticImageRef; root: () => HTMLElement
         }}
       >
         {source() ? (
-          <img src={source() || undefined} alt="Extracted PDF content" />
+          <img
+            src={source() || undefined}
+            alt={`PDF figure, ${props.image.width} by ${props.image.height} pixels`}
+          />
         ) : (
           <span class="muted">
             {error() || (props.image.object ? "Loading image..." : "Inline image unavailable")}
