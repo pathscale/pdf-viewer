@@ -123,7 +123,8 @@ export function AnnotationOverlay(props: {
   const [textSelection, setTextSelection] = createSignal<TextRange | null>(null);
   const [textDrag, setTextDrag] = createSignal<TextDrag | null>(null);
   const [textCursor, setTextCursor] = createSignal(false);
-  let layer!: HTMLDivElement;
+  let layer!: HTMLButtonElement;
+  let overlay!: HTMLDivElement;
   let contents!: HTMLTextAreaElement;
   let lastPress: { time: number; x: number; y: number; count: number } | null = null;
   const copyText = (): string | null => {
@@ -151,7 +152,7 @@ export function AnnotationOverlay(props: {
   }
 
   function displayPoint(event: PointerEvent, size: PageSize): Point | null {
-    const rect = layer.getBoundingClientRect();
+    const rect = overlay.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
     return [
       ((event.clientX - rect.left) / rect.width) * size.width,
@@ -374,7 +375,7 @@ export function AnnotationOverlay(props: {
     if (kind === "free_text") input.size = 12;
     const anchor =
       kind === "highlight" && lines ? glyphAt(lines, pdfToDisplay(position, size)) : null;
-    const rect = layer.getBoundingClientRect();
+    const rect = overlay.getBoundingClientRect();
     setGesture({
       pointer: event.pointerId,
       input,
@@ -496,8 +497,27 @@ export function AnnotationOverlay(props: {
     square: "rectangle",
     circle: "ellipse",
   };
-  // While a placing tool is active the layer is an operable control, not just a container.
   const placing = () => editor.enabled() && props.ready() && editor.tool() !== "select";
+  const hasInteractionTarget = () =>
+    editor.enabled() || (props.ready() && (props.lines()?.length || 0) > 0);
+  const interactionLabel = () => {
+    if (placing()) {
+      return `Place ${TOOL_NAMES[editor.tool()] ?? editor.tool()} on page ${props.index + 1}`;
+    }
+    if (editor.enabled()) return `Select annotations on page ${props.index + 1}`;
+    return `Select text on page ${props.index + 1}`;
+  };
+
+  function handleKeyDown(event: KeyboardEvent): void {
+    if (event.key !== "Escape") return;
+    cancel();
+    setTextSelection(null);
+    setDraft(null);
+    editor.clearSelection();
+    event.preventDefault();
+    event.stopPropagation();
+    layer.focus();
+  }
 
   return (
     <div
@@ -508,40 +528,34 @@ export function AnnotationOverlay(props: {
         "text-selectable": !editor.enabled() && props.ready() && (props.lines()?.length || 0) > 0,
         "text-cursor": textCursor(),
       }}
-      role={placing() ? "button" : "group"}
-      aria-label={
-        placing()
-          ? `Place ${TOOL_NAMES[editor.tool()] ?? editor.tool()} on page ${props.index + 1}`
-          : `Annotations on page ${props.index + 1}`
-      }
-      tabindex={editor.enabled() ? 0 : -1}
       ref={(element) => {
-        layer = element;
-      }}
-      onPointerDown={start}
-      onPointerMove={(event) => {
-        move(event);
-        moveText(event);
-        hover(event);
-      }}
-      onPointerUp={finish}
-      onPointerCancel={cancel}
-      onLostPointerCapture={cancel}
-      onPointerLeave={() => {
-        if (!textDrag()) setTextCursor(false);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          cancel();
-          setTextSelection(null);
-          setDraft(null);
-          editor.clearSelection();
-          event.preventDefault();
-          event.stopPropagation();
-          layer.focus();
-        }
+        overlay = element;
       }}
     >
+      {hasInteractionTarget() ? (
+        <button
+          type="button"
+          class="annotation-interaction-target"
+          aria-label={interactionLabel()}
+          tabindex={editor.enabled() ? 0 : -1}
+          ref={(element) => {
+            layer = element;
+          }}
+          onPointerDown={start}
+          onPointerMove={(event) => {
+            move(event);
+            moveText(event);
+            hover(event);
+          }}
+          onPointerUp={finish}
+          onPointerCancel={cancel}
+          onLostPointerCapture={cancel}
+          onPointerLeave={() => {
+            if (!textDrag()) setTextCursor(false);
+          }}
+          onKeyDown={handleKeyDown}
+        />
+      ) : null}
       <svg
         class="annotation-preview"
         viewBox={`0 0 ${props.size().width} ${props.size().height}`}
@@ -614,6 +628,7 @@ export function AnnotationOverlay(props: {
               required
               value={text()}
               disabled={editor.busy()}
+              onKeyDown={handleKeyDown}
               onInput={(event) => setText(event.currentTarget.value)}
               ref={(element) => {
                 contents = element;
@@ -621,13 +636,19 @@ export function AnnotationOverlay(props: {
             />
           </label>
           <div class="editing-tools">
-            <Button type="submit" class="viewer-button" disabled={editor.busy() || !text().trim()}>
+            <Button
+              type="submit"
+              class="viewer-button"
+              disabled={editor.busy() || !text().trim()}
+              onKeyDown={handleKeyDown}
+            >
               Add annotation
             </Button>
             <Button
               type="button"
               class="viewer-button"
               disabled={editor.busy()}
+              onKeyDown={handleKeyDown}
               onClick={() => {
                 setDraft(null);
                 layer.focus();

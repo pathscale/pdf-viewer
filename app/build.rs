@@ -70,10 +70,19 @@ fn embed() -> io::Result<()> {
         .ok_or_else(|| io::Error::other("CARGO_MANIFEST_DIR is missing"))?;
     let output =
         std::env::var_os("OUT_DIR").ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
-    // The repo builds from frontend/dist; the published crate carries the same bundle in ui/.
+    // Source-tree builds may opt into frontend/dist; published crates use the bundle in ui/.
     let manifest = PathBuf::from(manifest);
     let repo_dist = manifest.join("../frontend/dist");
-    let dist = if repo_dist.join("index.html").is_file() {
+    let repo_package = manifest.join("../frontend/package.json");
+    let trusted_frontend = caps::bytes(&repo_package)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|package| {
+            package.get("name").and_then(serde_json::Value::as_str) == Some("pdf-viewer-frontend")
+        });
+    println!("cargo:rerun-if-env-changed=PDF_VIEWER_USE_REPO_UI");
+    let use_repo_ui = std::env::var("PDF_VIEWER_USE_REPO_UI").as_deref() == Ok("1");
+    let dist = if use_repo_ui && trusted_frontend && repo_dist.join("index.html").is_file() {
         repo_dist
     } else {
         manifest.join("ui")
@@ -81,6 +90,7 @@ fn embed() -> io::Result<()> {
     let output = PathBuf::from(output);
 
     println!("cargo:rerun-if-changed=../frontend");
+    println!("cargo:rerun-if-changed=../frontend/package.json");
     println!("cargo:rerun-if-changed=../frontend/dist");
     println!("cargo:rerun-if-changed=ui");
     for name in ["index.html", "app.js", "app.css"] {
