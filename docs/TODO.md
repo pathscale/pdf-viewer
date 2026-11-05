@@ -1,5 +1,9 @@
 # TODO
 
+- [ ] Revalidate fallback font delivery for unembedded standard PDF fonts.
+  Verify visible glyphs and semantic text with a neutral fixture; do not infer
+  successful rendering from document load alone.
+
 ## Security queue follow-up
 
 - [ ] Verify that the default embeds packaged `app/ui` assets while the `PDF_VIEWER_USE_REPO_UI=1` opt-in requires the expected frontend package.
