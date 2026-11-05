@@ -6,7 +6,9 @@ A pure Rust PDF viewer: an izumo window (Blitz and Boa, no OS webview) with a So
 Two views of every document: the page view (faithful rendering) and the reading view (the semantic document
 reflowed like a web page: headings, paragraphs, links, images). Outline, thumbnails, search and zoom. Edit mode adds
 highlights, notes, freehand ink, text boxes, rectangles and ellipses, page rotation, reordering, deletion and
-insertion, document properties and undo; saving appends one incremental revision so the original bytes stay intact.
+insertion, document properties and undo; page deletion, annotation removal and metadata edits rewrite the PDF, while
+other edits may append an incremental revision. Saving is not secure redaction, and the viewer does not verify that
+removed information is unrecoverable.
 
 ## Install
 
@@ -18,6 +20,11 @@ pdf-viewer --install-app
 On macOS, `--install-app` writes `~/Applications/PDF Viewer.app` around the installed binary and makes it the
 default app for PDF files; run it again after upgrading. `--uninstall-app` removes it. `pdf-viewer FILE.pdf` opens a
 file directly on any platform.
+
+## Build from source
+
+Workspace builds embed the packaged `app/ui` bundle by default. Set `PDF_VIEWER_USE_REPO_UI=1` to opt into
+`frontend/dist`; the opt-in is accepted only when the sibling frontend package is named `pdf-viewer-frontend`.
 
 ## License
 

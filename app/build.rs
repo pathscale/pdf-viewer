@@ -70,7 +70,7 @@ fn embed() -> io::Result<()> {
         .ok_or_else(|| io::Error::other("CARGO_MANIFEST_DIR is missing"))?;
     let output =
         std::env::var_os("OUT_DIR").ok_or_else(|| io::Error::other("OUT_DIR is missing"))?;
-    // The repo builds from frontend/dist; the published crate carries the same bundle in ui/.
+    // Source-tree builds may opt into frontend/dist; published crates use the bundle in ui/.
     let manifest = PathBuf::from(manifest);
     let repo_dist = manifest.join("../frontend/dist");
     let repo_package = manifest.join("../frontend/package.json");
