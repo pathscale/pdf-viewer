@@ -80,7 +80,9 @@ fn embed() -> io::Result<()> {
         .is_some_and(|package| {
             package.get("name").and_then(serde_json::Value::as_str) == Some("pdf-viewer-frontend")
         });
-    let dist = if trusted_frontend && repo_dist.join("index.html").is_file() {
+    println!("cargo:rerun-if-env-changed=PDF_VIEWER_USE_REPO_UI");
+    let use_repo_ui = std::env::var("PDF_VIEWER_USE_REPO_UI").as_deref() == Ok("1");
+    let dist = if use_repo_ui && trusted_frontend && repo_dist.join("index.html").is_file() {
         repo_dist
     } else {
         manifest.join("ui")

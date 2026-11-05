@@ -62,6 +62,11 @@ textarea:focus-visible,
   font-size: var(--viewer-control-text);
 }
 
+.editing-redaction-note {
+  margin: var(--viewer-space-xs) var(--viewer-space-md);
+  font-size: var(--viewer-control-text);
+}
+
 .editing-tools svg {
   flex: none;
 }

@@ -145,6 +145,10 @@ export function EditingToolbar(props: { editor: Editor }) {
         </fieldset>
         {editor.busy() ? <span role="status">Applying edit...</span> : null}
       </div>
+      <p class="editing-redaction-note" role="note">
+        Saving is not a secure redaction process. This editor does not verify that removed
+        information is unrecoverable.
+      </p>
       {encryptedSaveOpen() ? (
         <EncryptedSaveDialog editor={editor} onClose={() => setEncryptedSaveOpen(false)} />
       ) : null}
