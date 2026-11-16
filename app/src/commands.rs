@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +15,9 @@ use pdf_toolkit::text::images::{ImageData, load_image};
 use pdf_toolkit::text::semantic::{LinkTarget, SemanticKind, SemanticPage, SemanticReader};
 use serde_json::{Value, json};
 
+#[path = "rewrite_walk.rs"]
+mod rewrite_walk;
+
 pub(crate) const MAX_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16_000_000;
 fn pixel_limit() -> u64 {
@@ -25,7 +28,10 @@ const MAX_QUERY_BYTES: usize = 4096;
 const MAX_SEARCH_TEXT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_PASSWORD_BYTES: usize = 1024 * 1024;
-const MAX_ENCRYPTED_OBJECTS: u32 = 1_000_000;
+const MAX_REWRITE_OBJECTS: u32 = 1_000_000;
+const MAX_REWRITE_VALUES: u64 = 4_000_000;
+const REWRITE_RESERVE_BATCH: usize = 64;
+const REWRITE_MAP_ENTRY_ESTIMATE: u64 = 128;
 const THUMBNAIL_WIDTH: f64 = 160.0;
 
 pub type State = Arc<Mutex<Option<OpenDoc>>>;
@@ -896,13 +902,13 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 fn writer_name(bytes: Vec<u8>) -> Result<String, String> {
-    String::from_utf8(bytes)
-        .map_err(|_| "PDF names must be UTF-8 to save an encrypted copy".to_owned())
+    String::from_utf8(bytes).map_err(|_| "PDF names must be UTF-8 to rewrite the PDF".to_owned())
 }
 
 fn writer_value(
     value: pdf_toolkit::core::ValueRef<'_>,
-    references: &BTreeMap<u32, u32>,
+    references: &BTreeMap<(u32, u16), u32>,
+    document: &Document,
 ) -> Result<pdf_toolkit::write::Value, String> {
     use pdf_toolkit::core::ValueKind;
     use pdf_toolkit::write::Value as WriteValue;
@@ -946,7 +952,7 @@ fn writer_value(
                 .ok_or_else(|| "PDF array value is invalid".to_owned())?;
             let mut values = Vec::new();
             for item in array.iter() {
-                values.push(writer_value(item, references)?);
+                values.push(writer_value(item, references, document)?);
             }
             Ok(WriteValue::Array(values))
         }
@@ -958,7 +964,7 @@ fn writer_value(
             for (key, item) in dictionary.iter() {
                 values.push((
                     writer_name(key.decoded().into_owned())?,
-                    writer_value(item, references)?,
+                    writer_value(item, references, document)?,
                 ));
             }
             Ok(WriteValue::Dict(values))
@@ -967,68 +973,258 @@ fn writer_value(
             let id = value
                 .as_ref()
                 .ok_or_else(|| "PDF reference value is invalid".to_owned())?;
+            if !rewrite_ref_is_live(document, id) {
+                return Ok(WriteValue::Null);
+            }
             let number = references
-                .get(&id.number())
+                .get(&(id.number(), id.generation()))
                 .copied()
-                .ok_or_else(|| format!("PDF reference {} is missing", id.number()))?;
+                .ok_or_else(|| {
+                    format!(
+                        "PDF reference {} {} is missing",
+                        id.number(),
+                        id.generation()
+                    )
+                })?;
             Ok(WriteValue::Ref(number, 0))
         }
     }
 }
 
-fn encrypted_pdf(doc: &OpenDoc, password: &[u8]) -> Result<Vec<u8>, String> {
-    let object_count = doc.document.xref().size().saturating_sub(1);
-    if object_count > MAX_ENCRYPTED_OBJECTS {
-        return Err(refusal(
-            "encrypted_objects",
-            u64::from(object_count),
-            u64::from(MAX_ENCRYPTED_OBJECTS),
+fn rewrite_ref_is_live(document: &Document, id: ObjectRef) -> bool {
+    rewrite_ref_is_live_entry(id, document.xref().get(id.number()))
+}
+
+fn rewrite_ref_is_live_entry(id: ObjectRef, entry: Option<XrefEntry>) -> bool {
+    id.number() != 0
+        && match entry {
+            Some(XrefEntry::InUse { generation, .. }) => generation == id.generation(),
+            Some(XrefEntry::Compressed { .. }) => id.generation() == 0,
+            Some(XrefEntry::Free) | None => false,
+        }
+}
+
+#[cfg(test)]
+mod rewrite_ref_tests {
+    use super::{ObjectRef, XrefEntry, rewrite_ref_is_live_entry};
+
+    #[test]
+    fn rewrite_liveness_checks_xref_state_and_generation() {
+        assert!(rewrite_ref_is_live_entry(
+            ObjectRef::new(7, 2),
+            Some(XrefEntry::InUse {
+                offset: 10,
+                generation: 2,
+            }),
+        ));
+        assert!(!rewrite_ref_is_live_entry(
+            ObjectRef::new(7, 1),
+            Some(XrefEntry::InUse {
+                offset: 10,
+                generation: 2,
+            }),
+        ));
+        assert!(rewrite_ref_is_live_entry(
+            ObjectRef::new(8, 0),
+            Some(XrefEntry::Compressed {
+                stream: 3,
+                index: 0,
+            }),
+        ));
+        assert!(!rewrite_ref_is_live_entry(
+            ObjectRef::new(8, 1),
+            Some(XrefEntry::Compressed {
+                stream: 3,
+                index: 0,
+            }),
+        ));
+        assert!(!rewrite_ref_is_live_entry(
+            ObjectRef::new(9, 0),
+            Some(XrefEntry::Free),
+        ));
+        assert!(!rewrite_ref_is_live_entry(ObjectRef::new(10, 0), None));
+        assert!(!rewrite_ref_is_live_entry(
+            ObjectRef::new(0, 0),
+            Some(XrefEntry::InUse {
+                offset: 0,
+                generation: 0,
+            }),
         ));
     }
+}
 
-    let mut writer = pdf_toolkit::write::Writer::new_encrypted("2.0", password, None)
-        .map_err(|error| error.to_string())?;
-    let mut references = BTreeMap::new();
-    let mut objects = Vec::new();
-    let capacity = usize::try_from(object_count).map_err(|_| {
-        refusal(
-            "encrypted_objects",
-            u64::from(object_count),
-            u64::from(MAX_ENCRYPTED_OBJECTS),
-        )
-    })?;
-    objects.try_reserve_exact(capacity).map_err(|_| {
-        refusal(
-            "encrypted_objects",
-            u64::from(object_count),
-            u64::from(MAX_ENCRYPTED_OBJECTS),
-        )
-    })?;
+struct RewriteGraph {
+    references: BTreeMap<(u32, u16), u32>,
+    objects: Vec<ObjectRef>,
+    map_preflighted: usize,
+}
 
-    for number in 1..doc.document.xref().size() {
-        let source_id = match doc.document.xref().get(number) {
-            Some(XrefEntry::InUse { generation, .. }) => ObjectRef::new(number, generation),
-            Some(XrefEntry::Compressed { .. }) => ObjectRef::new(number, 0),
-            Some(XrefEntry::Free) | None => continue,
-        };
-        let destination = writer.alloc().map_err(|error| error.to_string())?;
-        references.insert(number, destination);
-        objects.push((source_id, destination));
+impl RewriteGraph {
+    fn new() -> Self {
+        Self {
+            references: BTreeMap::new(),
+            objects: Vec::new(),
+            map_preflighted: 0,
+        }
     }
+
+    fn enqueue(&mut self, id: ObjectRef, document: &Document) -> Result<(), String> {
+        if !rewrite_ref_is_live(document, id) {
+            return Ok(());
+        }
+        let key = (id.number(), id.generation());
+        if self.references.contains_key(&key) {
+            return Ok(());
+        }
+
+        let requested = u64::try_from(self.objects.len())
+            .unwrap_or(u64::MAX)
+            .checked_add(1)
+            .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?;
+        if requested > u64::from(MAX_REWRITE_OBJECTS) {
+            return Err(refusal(
+                "rewrite_objects",
+                requested,
+                u64::from(MAX_REWRITE_OBJECTS),
+            ));
+        }
+        let needed = self
+            .objects
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?;
+        let mut queue_bytes = 0u64;
+        let mut queue_target = self.objects.capacity();
+        if needed > self.objects.capacity() {
+            queue_target = needed
+                .checked_add(REWRITE_RESERVE_BATCH - 1)
+                .map(|value| value / REWRITE_RESERVE_BATCH * REWRITE_RESERVE_BATCH)
+                .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?;
+            let additional = queue_target.saturating_sub(self.objects.len());
+            queue_bytes = additional
+                .checked_mul(std::mem::size_of::<ObjectRef>())
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?;
+        }
+        let map_target = requested
+            .checked_add(REWRITE_RESERVE_BATCH as u64 - 1)
+            .map(|value| value / REWRITE_RESERVE_BATCH as u64 * REWRITE_RESERVE_BATCH as u64)
+            .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?
+            .min(u64::from(MAX_REWRITE_OBJECTS));
+        let map_bytes = map_target
+            .saturating_sub(self.map_preflighted as u64)
+            .checked_mul(REWRITE_MAP_ENTRY_ESTIMATE)
+            .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?;
+        let planned_bytes = queue_bytes
+            .checked_add(map_bytes)
+            .ok_or_else(|| "the PDF rewrite graph is too large".to_owned())?;
+        if planned_bytes > 0 {
+            crate::app_caps::reserve_bytes(planned_bytes);
+        }
+        if needed > self.objects.capacity() {
+            let additional = queue_target.saturating_sub(self.objects.len());
+            // The checked batch target is charged above; exact reservation avoids
+            // Vec's geometric growth overshooting it, though allocator rounding
+            // and the temporary old-plus-new buffers remain RSS estimates.
+            self.objects
+                .try_reserve_exact(additional)
+                .map_err(|_| "could not allocate the PDF rewrite graph".to_owned())?;
+        }
+        self.map_preflighted = usize::try_from(map_target).unwrap_or(usize::MAX);
+        self.references.insert(key, 0);
+        self.objects.push(id);
+        Ok(())
+    }
+}
+
+fn source_file_id(document: &Document) -> Result<Option<pdf_toolkit::write::Value>, String> {
+    use pdf_toolkit::core::ValueKind;
+
+    let Some(id) = document
+        .trailer()
+        .dict()
+        .and_then(|trailer| trailer.get(b"ID"))
+    else {
+        return Ok(None);
+    };
+    let Some(array) = id.as_array() else {
+        return Ok(None);
+    };
+    if array.iter().count() != 2
+        || !array
+            .iter()
+            .all(|item| matches!(item.kind(), ValueKind::String))
+    {
+        return Ok(None);
+    }
+    writer_value(id, &BTreeMap::new(), document).map(Some)
+}
+
+// The encrypted writer adds its own /ID tied to its key, so only plain rewrites keep the source /ID.
+fn write_reachable_pdf(
+    doc: &OpenDoc,
+    mut writer: pdf_toolkit::write::Writer,
+    keep_id: bool,
+) -> Result<Vec<u8>, String> {
+    require_unencrypted(doc)?;
 
     let root = doc
         .document
         .root_ref()
         .ok_or_else(|| "the PDF has no catalog".to_owned())?;
-    let root = references
-        .get(&root.number())
+    if !rewrite_ref_is_live(&doc.document, root) {
+        return Err(format!(
+            "PDF reference {} {} is not live",
+            root.number(),
+            root.generation()
+        ));
+    }
+    let info = doc
+        .document
+        .info_ref()
+        .filter(|id| rewrite_ref_is_live(&doc.document, *id));
+
+    let mut graph = RewriteGraph::new();
+    graph.enqueue(root, &doc.document)?;
+    if let Some(info) = info {
+        graph.enqueue(info, &doc.document)?;
+    }
+
+    let mut resolver = doc.document.resolver();
+    let mut index = 0;
+    let configured_iterations = crate::app_caps::hard("iterations");
+    let mut remaining_values = MAX_REWRITE_VALUES.min(configured_iterations);
+    let max_depth = Limits::default().max_depth;
+    while index < graph.objects.len() {
+        crate::app_caps::turn("PDF rewrite: discover object");
+        let id = graph.objects[index];
+        let object = resolver.get(id).map_err(pdf_error)?;
+        rewrite_walk::visit_refs(object.root(), &mut remaining_values, max_depth, |reference| {
+            graph.enqueue(reference, &doc.document)
+        })?;
+        index += 1;
+    }
+
+    for id in &graph.objects {
+        let destination = writer.alloc().map_err(|error| error.to_string())?;
+        graph.references.insert((id.number(), id.generation()), destination);
+    }
+
+    let root = graph
+        .references
+        .get(&(root.number(), root.generation()))
         .copied()
         .ok_or_else(|| "the PDF catalog is missing".to_owned())?;
 
-    let mut resolver = doc.document.resolver();
-    for (source_id, destination) in objects {
+    for source_id in graph.objects {
+        crate::app_caps::turn("PDF rewrite: write object");
+        let destination = graph
+            .references
+            .get(&(source_id.number(), source_id.generation()))
+            .copied()
+            .ok_or_else(|| "PDF rewrite mapping is missing".to_owned())?;
         let object = resolver.get(source_id).map_err(pdf_error)?;
-        let value = writer_value(object.root(), &references)?;
+        let value = writer_value(object.root(), &graph.references, &doc.document)?;
         match (object.is_stream(), value) {
             (true, pdf_toolkit::write::Value::Dict(dictionary)) => {
                 let data = object
@@ -1051,18 +1247,13 @@ fn encrypted_pdf(doc: &OpenDoc, password: &[u8]) -> Result<Vec<u8>, String> {
         }
     }
 
+    let info = info.and_then(|id| graph.references.get(&(id.number(), id.generation())).copied());
     let mut extra = Vec::new();
-    if let Some(trailer) = doc.document.trailer().dict() {
-        for (key, value) in trailer.iter() {
-            let key = writer_name(key.decoded().into_owned())?;
-            if matches!(
-                key.as_str(),
-                "Root" | "Size" | "Encrypt" | "ID" | "Prev" | "XRefStm"
-            ) {
-                continue;
-            }
-            extra.push((key, writer_value(value, &references)?));
-        }
+    if let Some(info) = info {
+        extra.push(("Info".to_owned(), pdf_toolkit::write::Value::Ref(info, 0)));
+    }
+    if keep_id && let Some(id) = source_file_id(&doc.document)? {
+        extra.push(("ID".to_owned(), id));
     }
     writer
         .finish_table(root, extra)
@@ -1078,36 +1269,15 @@ fn encrypted_pdf(doc: &OpenDoc, password: &[u8]) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut temporary_name = path.as_os_str().to_os_string();
-    temporary_name.push(".tmp");
-    let temporary = PathBuf::from(temporary_name);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
-    let result = (|| {
-        match fs::metadata(path) {
-            Ok(metadata) => file
-                .set_permissions(metadata.permissions())
-                .map_err(|error| format!("could not preserve file permissions: {error}"))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("could not inspect the save path: {error}")),
-        }
-        file.write_all(bytes)
-            .map_err(|error| format!("could not write PDF: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("could not flush PDF: {error}"))?;
-        drop(file);
-        fs::rename(&temporary, path)
-            .map_err(|error| format!("could not replace {}: {error}", path.display()))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+pub(crate) fn rewritten_pdf(doc: &OpenDoc) -> Result<Vec<u8>, String> {
+    let writer = pdf_toolkit::write::Writer::new("2.0").map_err(|error| error.to_string())?;
+    write_reachable_pdf(doc, writer, true)
+}
+
+fn encrypted_pdf(doc: &OpenDoc, password: &[u8]) -> Result<Vec<u8>, String> {
+    let writer = pdf_toolkit::write::Writer::new_encrypted("2.0", password, None)
+        .map_err(|error| error.to_string())?;
+    write_reachable_pdf(doc, writer, false)
 }
 
 fn save_encrypted_copy(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
@@ -1153,7 +1323,7 @@ fn save_encrypted_copy(doc: &OpenDoc, args: &Value) -> Result<Value, String> {
     }
 
     let bytes = encrypted_pdf(doc, password.as_bytes())?;
-    atomic_write(&path, &bytes)?;
+    editing::atomic_write(&path, &bytes)?;
     Ok(json!({ "path": path.to_string_lossy() }))
 }
 
@@ -1175,6 +1345,13 @@ fn dispatch(
         if path.is_empty() {
             return Err("path must be nonempty".to_owned());
         }
+        if path.len() > MAX_PATH_BYTES {
+            return Err(refusal(
+                "path_bytes",
+                path.len() as u64,
+                MAX_PATH_BYTES as u64,
+            ));
+        }
         let reply = open_path(state, Path::new(path))?;
         if let Err(error) = handle.emit("document_opened", &reply) {
             eprintln!("pdf-viewer: could not announce the opened document: {error}");
@@ -1185,6 +1362,13 @@ fn dispatch(
         let path = string_arg(&args, "path")?;
         if path.is_empty() {
             return Err("path must be nonempty".to_owned());
+        }
+        if path.len() > MAX_PATH_BYTES {
+            return Err(refusal(
+                "path_bytes",
+                path.len() as u64,
+                MAX_PATH_BYTES as u64,
+            ));
         }
         let password = string_arg(&args, "password")?;
         if password.len() > MAX_PASSWORD_BYTES {

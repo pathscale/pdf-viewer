@@ -9,7 +9,7 @@ build = "build.rs"
 readme = "../README.md"
 keywords = ["pdf", "viewer", "reader"]
 categories = ["gui"]
-include = ["src/**", "assets/**", "ui/**", "build.rs", "Cargo.toml"]
+include = ["src/**", "assets/**", "ui/**", "build.rs", "build_caps.rs", "Cargo.toml"]
 
 [[bin]]
 name = "pdf-viewer"
@@ -42,3 +42,4 @@ libc = "^0.2"
 nagoya = { version = "^0.1", features = ["reactor"] }
 brotli.workspace = true
 miniz_oxide = "^0.8"
+serde_json.workspace = true

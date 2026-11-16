@@ -1,6 +1,6 @@
 name: Publish
 
-# A version bump on master is the release trigger. Cargo packages and
+# Dispatch manually from master after a reviewed manifest version bump. Cargo packages and
 # uploads the crate (verified by the local gate, not here); crates.io decides whether that version can be published.
 on:
   workflow_dispatch:
@@ -32,6 +32,6 @@ jobs:
         run: bun install && bun run crate
 
       - name: Publish
-        run: cargo publish -p pdf-viewer --allow-dirty --no-verify
+        run: cargo publish -p pdf-viewer --registry crates-io --allow-dirty --no-verify
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
